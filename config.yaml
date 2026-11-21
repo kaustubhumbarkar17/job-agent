@@ -1,0 +1,26 @@
+search:
+  titles: ["Full Stack Engineer", "Backend Engineer", "AI Engineer", "SDE 2"]
+  locations: ["Chennai", "Bangalore", "Remote India"]
+  window: "7d"
+  max_queries_per_run: 12
+  results_per_query: 10
+  blocklist_title_words: ["intern", "sales", "unpaid"]
+  blocklist_companies: []
+
+scoring:
+  embed_keep_fraction: 0.4
+  min_score_for_shortlist: 65
+  weight_must_have_skills: 40
+  weight_seniority: 25
+  weight_domain: 20
+  weight_location: 15
+
+contacts:
+  target_roles: ["Talent Acquisition", "Recruiter", "Engineering Manager", "Head of Engineering", "CTO"]
+  max_per_job: 3
+  min_email_confidence: 0.8
+
+email:
+  max_drafts_per_day: 12
+  max_words: 120
+  resume_path: ""

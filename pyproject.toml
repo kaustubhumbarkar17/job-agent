@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "job-agent"
+version = "0.1.0"
+description = "Job-Hunt Agent: discover, score, and draft emails for job applications"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx",
+    "pydantic>=2",
+    "pyyaml",
+    "python-dotenv",
+    "typer",
+    "rich",
+    "questionary",
+    "numpy",
+    "tenacity",
+    "firecrawl-py",
+    "google-api-python-client",
+    "google-auth-oauthlib",
+    "google-auth-httplib2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-mock", "respx", "ruff"]
+
+[project.scripts]
+job-agent = "agent.cli:app"

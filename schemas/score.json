@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": ["score", "breakdown", "matched_skills", "missing_skills", "seniority_fit", "reasoning"],
+  "properties": {
+    "score": {"type": "integer", "minimum": 0, "maximum": 100},
+    "breakdown": {
+      "type": "object",
+      "required": ["skills", "seniority", "domain", "location"],
+      "properties": {
+        "skills": {"type": "integer"},
+        "seniority": {"type": "integer"},
+        "domain": {"type": "integer"},
+        "location": {"type": "integer"}
+      }
+    },
+    "matched_skills": {"type": "array", "items": {"type": "string"}},
+    "missing_skills": {"type": "array", "items": {"type": "string"}},
+    "seniority_fit": {"type": "string", "enum": ["under", "fit", "over"]},
+    "dealbreaker": {"type": ["string", "null"]},
+    "reasoning": {"type": "string", "maxLength": 200}
+  }
+}
