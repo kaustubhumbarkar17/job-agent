@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   score         INTEGER,
   score_json    TEXT,
   manual_note   TEXT,
-  run_id        TEXT REFERENCES runs(run_id)
+  run_id        TEXT  -- soft reference; app code ensures runs row exists
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_company_title ON jobs(company, title, location);

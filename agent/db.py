@@ -27,7 +27,7 @@ STATUS_TRANSITIONS: dict[str, set[str]] = {
 
 def _get_connection(db_path: str | Path) -> sqlite3.Connection:
     """Create and return a connection with row_factory, FK, WAL."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
@@ -49,8 +49,14 @@ def init_db(db_path: str | Path) -> None:
         conn.close()
 
 
-def connect(db_path: str | Path) -> sqlite3.Connection:
-    """Open a connection, applying schema if needed."""
+def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
+    """Open a connection, applying schema if needed.
+
+    Uses settings.db_path as default if not provided.
+    """
+    if db_path is None:
+        from agent.config import get_settings
+        db_path = get_settings().db_path
     path = Path(db_path)
     if not path.exists():
         init_db(path)
