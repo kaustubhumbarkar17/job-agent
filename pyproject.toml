@@ -26,5 +26,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-mock", "respx", "ruff"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["agent"]
+
 [project.scripts]
 job-agent = "agent.cli:app"
