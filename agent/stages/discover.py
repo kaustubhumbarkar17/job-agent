@@ -17,6 +17,7 @@ def run(
     run_id: str = "",
     dry_run: bool = False,
     db_path: Optional[str | Path] = None,
+    **kwargs,
 ) -> dict:
     """Run the discover stage. Returns summary stats."""
     settings = get_settings()

@@ -8,8 +8,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-import questionary
-
 from agent.db import connect, jobs_by_status, set_status
 
 
@@ -17,6 +15,7 @@ def run(
     run_id: str = "",
     yes: bool = False,
     db_path: Optional[str | Path] = None,
+    **kwargs,
 ) -> dict:
     """Run the pick stage. Returns selected job IDs."""
     conn = connect(db_path)
@@ -36,6 +35,9 @@ def run(
     if yes:
         selected = [item["id"] for item in items]
     else:
+        # Lazy import to avoid EOFError in non-tty environments (tests, CI)
+        import questionary
+
         labels = [item["label"] for item in items]
         chosen = questionary.checkbox(
             "Select jobs to deep-scrape (Space to select, Enter to confirm):",

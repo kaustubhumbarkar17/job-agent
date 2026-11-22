@@ -61,6 +61,7 @@ def _build_email(subject: str, hook: str, proof: str, ask: str,
 def run(
     dry_run: bool = False,
     db_path: Optional[str | Path] = None,
+    **kwargs,
 ) -> dict:
     """Run the draft stage. Returns drafted/skipped counts."""
     settings = get_settings()

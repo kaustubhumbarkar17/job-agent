@@ -93,10 +93,10 @@ def _recompute_score(breakdown: dict[str, int], matched_skills: list[str],
     return corrected, score
 
 
-def run(run_id: str = "", dry_run: bool = False) -> dict:
+def run(run_id: str = "", dry_run: bool = False, db_path=None, **kwargs) -> dict:
     """Run the scoring stage. Returns scored job IDs and rejected count."""
     settings = get_settings()
-    conn = connect(settings.db_path)
+    conn = connect(db_path or settings.db_path)
     profile_md = _load_profile(conn)
 
     scraped = jobs_by_status(conn, "scraped")
@@ -146,7 +146,7 @@ def run(run_id: str = "", dry_run: bool = False) -> dict:
     # Pass 2: LLM rubric scoring
     scored = 0
     failed = 0
-    profile_md = _load_profile()
+    profile_md = _load_profile(conn)
 
     for job in jobs_by_status(conn, "scraped"):
         detail = json.loads(job["detail_json"]) if job["detail_json"] else {}
@@ -169,7 +169,7 @@ def run(run_id: str = "", dry_run: bool = False) -> dict:
 
             conn.execute(
                 "UPDATE jobs SET score = ?, score_json = ?, status = ? WHERE id = ?",
-                (final_score, json.dumps(result), "scored"),
+                (final_score, json.dumps(result), "scored", job["id"]),
             )
             scored += 1
         except (LLMOutputError, Exception) as e:

@@ -17,6 +17,7 @@ def run(
     run_id: str = "",
     dry_run: bool = False,
     db_path: Optional[str | Path] = None,
+    **kwargs,
 ) -> dict:
     """Run the scrape stage. Returns success/failure counts."""
     conn = connect(db_path)

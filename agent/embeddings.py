@@ -24,7 +24,7 @@ def embed(texts: list[str], model: str | None = None) -> np.ndarray:
     )
     resp.raise_for_status()
     data = resp.json()
-    return np.array([e["embedding"] for e in data["embeddings"]], dtype=np.float32)
+    return np.array(data["embeddings"], dtype=np.float32)
 
 
 def chunk_profile(md: str, max_tokens: int = 150) -> list[str]:

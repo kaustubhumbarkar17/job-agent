@@ -14,7 +14,7 @@ from typing import Optional
 from agent.db import connect, jobs_by_status, set_status
 
 
-def run(db_path: Optional[str | Path] = None) -> dict:
+def run(db_path: Optional[str | Path] = None, **kwargs) -> dict:
     """Run the contacts stage. Returns contacts found and jobs with none."""
     conn = connect(db_path)
     shortlisted = jobs_by_status(conn, "shortlisted")

@@ -12,7 +12,7 @@ from typing import Optional
 from agent.db import connect, jobs_by_status
 
 
-def run(db_path: Optional[str | Path] = None) -> dict:
+def run(db_path: Optional[str | Path] = None, **kwargs) -> dict:
     """Run the verify stage. Returns verified/unverified counts."""
     conn = connect(db_path)
     contacted = jobs_by_status(conn, "contacted")

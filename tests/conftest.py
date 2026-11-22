@@ -4,6 +4,4 @@ import pytest
 pytest_plugins = []
 
 
-def pytest_configure(config):
-    """Register custom marks."""
-    config.addinimark("live_local", doc="Requires live Ollama to be running.")
+# Marks are auto-registered in modern pytest (7+).
