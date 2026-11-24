@@ -1,6 +1,7 @@
 """CLI entry point — Typer-based command interface."""
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 
 import typer
@@ -251,43 +252,64 @@ def mark_sent(
     """Mark a draft as sent (after manual send in Gmail)."""
     from agent.db import connect
 
-    settings = get_settings()
-    path = Path(db) if db else Path(settings.db_path)
-    conn = connect(path)
-    conn.execute(
-        "UPDATE jobs SET status = 'sent' WHERE id = ?",
-        (draft_id,),
-    )
-    conn.commit()
+    with closing(connect(db)) as conn, conn:
+        changed = conn.execute(
+            """UPDATE drafts SET status = 'sent', sent_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND status = 'created' AND gmail_draft_id IS NOT NULL
+                 AND sent_at IS NULL""",
+            (draft_id,),
+        ).rowcount
+        if not changed:
+            row = conn.execute("SELECT sent_at FROM drafts WHERE id = ?", (draft_id,)).fetchone()
+            if row is None or row["sent_at"] is None:
+                raise typer.BadParameter(f"Draft {draft_id} is not a saved Gmail draft.")
+            print(f"Draft {draft_id} was already marked as sent at {row['sent_at']} UTC.")
+            return
     print(f"Draft {draft_id} marked as sent.")
-    conn.close()
+
+
+@app.command("mark-replied")
+def mark_replied(
+    draft_id: int = typer.Argument(..., help="Draft ID to mark as replied."),
+    db: str = typer.Option(None, "--db", help="Override database path."),
+):
+    """Record a reply manually and remove the draft from follow-ups."""
+    from agent.db import connect
+
+    with closing(connect(db)) as conn, conn:
+        changed = conn.execute(
+            """UPDATE drafts SET status = 'replied'
+               WHERE id = ? AND status IN ('sent', 'replied') AND sent_at IS NOT NULL""",
+            (draft_id,),
+        ).rowcount
+        if not changed:
+            raise typer.BadParameter(f"Draft {draft_id} has not been marked as sent.")
+    print(f"Draft {draft_id} marked as replied.")
 
 
 @app.command("followups")
 def followups(
-    days: int = typer.Option(5, "--days", help="Days since last contact."),
+    days: int = typer.Option(5, "--days", min=0, help="Minimum whole days since manual send."),
     db: str = typer.Option(None, "--db", help="Override database path."),
 ):
-    """Show jobs sent >N days ago with no reply."""
+    """List sent drafts that have no manually recorded reply."""
     from agent.db import connect
 
-    settings = get_settings()
-    path = Path(db) if db else Path(settings.db_path)
-    conn = connect(path)
-    rows = conn.execute(
-        """SELECT id, title, company FROM jobs
-           WHERE status = 'sent'
-             AND sent_at IS NOT NULL
-             AND julianday('now') - julianday(sent_at) > ?""",
-        (days,),
-    ).fetchall()
-    print(f"\nJobs with no reply in {days} days:")
+    with closing(connect(db)) as conn:
+        rows = conn.execute(
+            """SELECT drafts.id, jobs.title, jobs.company, contacts.email, drafts.sent_at
+               FROM drafts JOIN jobs ON drafts.job_id = jobs.id
+               JOIN contacts ON drafts.contact_id = contacts.id
+               WHERE drafts.status = 'sent'
+                 AND julianday(drafts.sent_at) <= julianday('now', ?)
+               ORDER BY julianday(drafts.sent_at), drafts.id""",
+            (f"-{days} days",),
+        ).fetchall()
+    print(f"\nDrafts sent at least {days} days ago with no recorded reply")
     if not rows:
         print("  (none)")
-    else:
-        for row in rows:
-            print(f"  [{row['id']}] {row['title']} @ {row['company']}")
-    conn.close()
+    for row in rows:
+        print(f"  [{row['id']}] {row['title']} @ {row['company']} · {row['email']} · {row['sent_at']} UTC")
 
 
 @app.command("eval")

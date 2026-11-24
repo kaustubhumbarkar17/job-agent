@@ -75,7 +75,7 @@ def reconcile(db_path: str | Path | None, draft_id: int, gmail_id: str | None) -
 
 def run(
     dry_run: bool = False, db_path: str | Path | None = None,
-    yes: bool = False, checkpoint: Checkpoint | None = None, **kwargs,
+    yes: bool = False, checkpoint: Checkpoint | None = None, run_id: str = "", **kwargs,
 ) -> dict:
     """Create at most one draft per eligible job/contact pair."""
     settings = get_settings()
@@ -145,7 +145,7 @@ def run(
                         "hook": "I am interested in this role.",
                         "proof": "I would be glad to share relevant work.",
                         "ask": "Could we schedule a short chat?",
-                    } if dry_run else chat_json(prompt, schema)
+                    } if dry_run else chat_json(prompt, schema, conn=conn, run_id=run_id)
                     try:
                         subject, body = _compose(
                             result, candidate["name"], title, company, profile, attachment, config.max_words,
@@ -189,6 +189,7 @@ def run(
                 (output / f"{draft_id}.txt").write_text(copy, encoding="utf-8")
                 gmail_id = None if dry_run else create_draft(
                     email, subject, body, str(attachment) if attachment else None,
+                    conn=conn, run_id=run_id,
                 )
             except (DraftRejected, OSError) as exc:
                 with conn:
@@ -204,5 +205,6 @@ def run(
                 with conn:
                     _finish(conn, draft_id, job_id, gmail_id)
                 drafted += 1
+                print(f"  Draft {draft_id} saved to {output / f'{draft_id}.txt'}.")
 
     return {"drafted": drafted, "failed": failed, "skipped": skipped, "pending": len(pending), "total": len(candidates)}

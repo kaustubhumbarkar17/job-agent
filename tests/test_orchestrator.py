@@ -329,3 +329,47 @@ class TestPipelineScripted:
 
         # Idempotent: same count
         assert total_before == total_after
+
+
+def test_pipeline_usage_counts_each_ollama_attempt_in_run(monkeypatch):
+    import json
+    from contextlib import closing
+    from unittest.mock import Mock
+
+    import httpx
+    from typer.testing import CliRunner
+
+    from agent import llm
+    from agent.cli import app
+    from agent.db import connect, upsert_job
+    from agent.stages import score
+
+    def chat_response(content):
+        return httpx.Response(
+            200, json={"message": {"content": content}},
+            request=httpx.Request("POST", "http://localhost:11434/api/chat"),
+        )
+
+    valid = json.dumps({
+        "score": 0, "breakdown": {"skills": 0, "seniority": 0, "domain": 0, "location": 0},
+        "matched_skills": [], "missing_skills": [], "seniority_fit": "fit", "reasoning": "Fixture",
+    })
+    post = Mock(side_effect=[chat_response("invalid JSON"), chat_response(valid)])
+    monkeypatch.setattr(score, "chat_json", llm.chat_json)
+    monkeypatch.setattr(llm.httpx, "post", post)
+
+    with closing(connect(TEST_DB_PATH)) as conn:
+        job_id = upsert_job(conn, "https://example.com/job", title="Engineer")
+        with conn:
+            conn.execute("UPDATE jobs SET status = 'scraped' WHERE id = ?", (job_id,))
+        result = CliRunner().invoke(app, ["score", "--db", TEST_DB_PATH])
+        assert result.exit_code == 0, result.output
+        assert "api_calls=2, network_calls=0, llm_calls=2" in result.output
+        assert "ollama /api/chat  1/2 successful" in result.output
+        rows = conn.execute("SELECT service, endpoint, ok, run_id FROM api_calls ORDER BY id").fetchall()
+        run_id = conn.execute("SELECT run_id FROM runs").fetchone()[0]
+        assert [tuple(row) for row in rows] == [
+            ("ollama", "/api/chat", 0, run_id), ("ollama", "/api/chat", 1, run_id),
+        ]
+        summary = json.loads(Path(f"logs/run-{run_id}.jsonl").read_text().splitlines()[-1])
+        assert summary["budget"]["llm_calls"] == 2

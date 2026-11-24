@@ -40,6 +40,9 @@ python -m agent.cli draft                # Draft emails (requires Gmail OAuth)
 | `draft` | Generate email drafts as Gmail drafts |
 | `reconcile-draft <id>` | Resolve an interrupted Gmail draft creation after reviewing Gmail Drafts |
 | `status` | Show job counts per status |
+| `mark-sent <draft-id>` | Record a send after sending manually in Gmail |
+| `mark-replied <draft-id>` | Record a reply and remove the draft from follow-ups |
+| `followups [--days 5]` | List manually sent drafts at least this old with no recorded reply |
 | `db-init` | Initialize the database |
 
 ## Architecture

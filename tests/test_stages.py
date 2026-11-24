@@ -238,7 +238,7 @@ def test_score_corrections_report_ranking_and_checkpoint_defaults(monkeypatch):
             )
         conn.commit()
 
-        def model(prompt, schema):
+        def model(prompt, schema, **kwargs):
             scores = {"High": 40, "Low": 20, "Blocked": 40}
             title = next(name for name in scores if f'"title": "{name}"' in prompt)
             return {
@@ -289,7 +289,7 @@ def test_embedding_filter_ranks_only_current_batch(monkeypatch):
             conn.execute("UPDATE jobs SET status = 'scraped' WHERE id = ?", (job_id,))
         conn.commit()
 
-        def vectors(texts):
+        def vectors(texts, **kwargs):
             return [[1, 0]] if len(texts) == 1 else [
                 [1, 0] if int(text.split()[-1]) >= 9 else [0, 1] for text in texts
             ]

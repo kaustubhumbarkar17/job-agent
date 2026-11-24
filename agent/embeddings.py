@@ -4,27 +4,40 @@ Provides chunking, embedding, and cosine similarity computation.
 """
 from __future__ import annotations
 
-import hashlib
-import re
-from typing import Any, List, Tuple
-
-import numpy as np
+from sqlite3 import Connection
+from time import perf_counter
+from typing import Any
 
 import httpx
+import numpy as np
+
 from agent.config import get_settings
+from agent.db import log_api_call
 
 
-def embed(texts: list[str], model: str | None = None) -> np.ndarray:
+def embed(
+    texts: list[str], model: str | None = None, *, conn: Connection | None = None, run_id: str = "",
+) -> np.ndarray:
     """Batch-embed texts via Ollama. Returns (n, dim) array."""
-    model_name = model or get_settings().embed_model
-    resp = httpx.post(
-        f"{get_settings().ollama_host}/api/embed",
-        json={"model": model_name, "input": texts},
-        timeout=180,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return np.array(data["embeddings"], dtype=np.float32)
+    settings = get_settings()
+    started = perf_counter()
+    ok = False
+    try:
+        resp = httpx.post(
+            f"{settings.ollama_host}/api/embed",
+            json={"model": model or settings.embed_model, "input": texts},
+            timeout=180,
+        )
+        resp.raise_for_status()
+        vectors = np.array(resp.json()["embeddings"], dtype=np.float32)
+        ok = True
+        return vectors
+    finally:
+        if conn is not None:
+            log_api_call(
+                conn, "ollama", "/api/embed", latency_ms=int((perf_counter() - started) * 1000),
+                ok=ok, run_id=run_id,
+            )
 
 
 def chunk_profile(md: str, max_tokens: int = 150) -> list[str]:

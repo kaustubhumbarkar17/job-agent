@@ -20,8 +20,8 @@ def offline_pipeline(tmp_path, monkeypatch):
     settings = config.Settings.from_yaml(root / "config.yaml")
     settings.db_path = str(tmp_path / "data" / "jobs.db")
     monkeypatch.setattr(config, "_settings", settings)
-    monkeypatch.setattr(score, "embed", lambda texts: np.ones((len(texts), 2)))
-    monkeypatch.setattr(score, "chat_json", lambda *_: {
+    monkeypatch.setattr(score, "embed", lambda texts, **kwargs: np.ones((len(texts), 2)))
+    monkeypatch.setattr(score, "chat_json", lambda *_, **kwargs: {
         "breakdown": {"skills": 0, "seniority": 25, "domain": 20, "location": 15},
         "matched_skills": [],
     })

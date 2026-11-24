@@ -5,6 +5,7 @@ operations are performed on the Gmail service.
 """
 import base64
 import re
+from contextlib import closing
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -93,13 +94,20 @@ class TestCreateDraft:
         assert attachment.get_payload(decode=True) == b"resume content"
         drafts.create.return_value.execute.assert_called_once_with(num_retries=0)
 
-    def test_missing_gmail_id_is_uncertain(self, mock_service):
+    def test_missing_gmail_id_is_uncertain(self, mock_service, tmp_path):
+        from agent.db import connect
         from agent.gmail_client import DraftUncertain, create_draft
 
         service, drafts, _ = mock_service
         drafts.create.return_value.execute.return_value = {}
-        with patch("agent.gmail_client._get_service", return_value=service), pytest.raises(DraftUncertain):
-            create_draft("alex@example.com", "Subject", "Body")
+        with (
+            patch("agent.gmail_client._get_service", return_value=service),
+            closing(connect(tmp_path / "jobs.db")) as conn,
+        ):
+            with pytest.raises(DraftUncertain):
+                create_draft("alex@example.com", "Subject", "Body", conn=conn, run_id="fixture")
+            call = conn.execute("SELECT service, endpoint, ok, run_id FROM api_calls").fetchone()
+            assert tuple(call) == ("gmail", "drafts.create", 0, "fixture")
 
     def test_desktop_oauth_caches_token(self, tmp_path):
         from agent.config import Settings

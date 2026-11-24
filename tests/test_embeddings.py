@@ -1,6 +1,5 @@
 """Tests for agent/embeddings.py."""
 import numpy as np
-import pytest
 
 from agent.embeddings import chunk_profile, cosine_similarity
 
@@ -46,3 +45,24 @@ class TestCosineSimilarity:
         v2 = np.array([-1.0, 0.0])
         sim = cosine_similarity(v1, v2)
         assert sim < -0.9
+
+
+def test_embed_records_batched_request(tmp_path, monkeypatch):
+    from contextlib import closing
+    from unittest.mock import Mock
+
+    import httpx
+
+    from agent.db import connect
+    from agent.embeddings import embed
+
+    response = httpx.Response(
+        200, json={"embeddings": [[1, 0], [0, 1]]},
+        request=httpx.Request("POST", "http://localhost:11434/api/embed"),
+    )
+    monkeypatch.setattr("agent.embeddings.httpx.post", Mock(return_value=response))
+    with closing(connect(tmp_path / "jobs.db")) as conn:
+        result = embed(["one", "two"], conn=conn, run_id="fixture")
+        assert result.shape == (2, 2)
+        call = conn.execute("SELECT service, endpoint, ok, run_id FROM api_calls").fetchone()
+        assert tuple(call) == ("ollama", "/api/embed", 1, "fixture")

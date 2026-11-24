@@ -6,6 +6,8 @@ import mimetypes
 import os
 from email.message import EmailMessage
 from pathlib import Path
+from sqlite3 import Connection
+from time import perf_counter
 from typing import TYPE_CHECKING
 
 from google.auth.exceptions import GoogleAuthError
@@ -18,6 +20,7 @@ from httplib2 import HttpLib2Error
 from oauthlib.oauth2 import OAuth2Error
 
 from agent.config import get_settings
+from agent.db import log_api_call
 
 if TYPE_CHECKING:
     from googleapiclient.discovery import Resource
@@ -52,7 +55,10 @@ def _get_service() -> Resource:
     return build("gmail", "v1", credentials=creds)
 
 
-def create_draft(to: str, subject: str, body: str, attachment_path: str | None = None) -> str:
+def create_draft(
+    to: str, subject: str, body: str, attachment_path: str | None = None,
+    *, conn: Connection | None = None, run_id: str = "",
+) -> str:
     """Create a MIME draft and return Gmail's draft ID."""
     try:
         msg = EmailMessage()
@@ -70,19 +76,27 @@ def create_draft(to: str, subject: str, body: str, attachment_path: str | None =
     except (OSError, ValueError, GoogleAuthError, HttpError, HttpLib2Error, OAuth2Error) as exc:
         raise DraftRejected(f"Could not prepare Gmail draft ({type(exc).__name__})") from exc
 
+    started = perf_counter()
+    ok = False
     try:
         draft = request.execute(num_retries=0)
+        draft_id = draft.get("id") if isinstance(draft, dict) else None
+        if not isinstance(draft_id, str) or not draft_id.strip():
+            raise DraftUncertain("Gmail did not return a draft ID")
+        ok = True
+        return draft_id
     except HttpError as exc:
         if exc.resp.status in {400, 401, 403, 404, 422, 429}:
             raise DraftRejected(f"Gmail rejected the draft (HTTP {exc.resp.status})") from exc
         raise DraftUncertain(f"Gmail returned HTTP {exc.resp.status} without a draft ID") from exc
     except (OSError, ValueError, GoogleAuthError, HttpLib2Error) as exc:
         raise DraftUncertain("Gmail did not return a draft ID") from exc
-
-    draft_id = draft.get("id") if isinstance(draft, dict) else None
-    if not isinstance(draft_id, str) or not draft_id.strip():
-        raise DraftUncertain("Gmail did not return a draft ID")
-    return draft_id
+    finally:
+        if conn is not None:
+            log_api_call(
+                conn, "gmail", "drafts.create", latency_ms=int((perf_counter() - started) * 1000),
+                ok=ok, run_id=run_id,
+            )
 
 
 def create_draft_raw(to: str, subject: str, body: str) -> str:

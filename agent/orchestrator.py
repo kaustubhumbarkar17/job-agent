@@ -291,7 +291,6 @@ def run_pipeline(
 def _execute_stages(conn, start_idx, stop_idx, run_id, db_path, dry_run, yes, window, checkpoint):
     results: dict[str, Any] = {}
     total_start = time.time()
-    budget: dict[str, Any] = {"api_calls": 0, "llm_calls": 0, "network_calls": 0}
 
     print(f"\n{'='*60}")
     print(f"Pipeline run: {run_id}")
@@ -338,12 +337,6 @@ def _execute_stages(conn, start_idx, stop_idx, run_id, db_path, dry_run, yes, wi
                 print(f"  [{name}] OK ({elapsed:.1f}s): {result}")
                 log_event(run_id, name, event="ok", duration_s=round(elapsed, 2))
 
-                # Track budget
-                if _is_network_stage(name):
-                    budget["network_calls"] += result.get("total", 0)
-                if _is_llm_stage(name):
-                    budget["llm_calls"] += result.get("scored", 0) + result.get("drafted", 0)
-
             except Exception as e:  # noqa: BLE001 - keep subsequent stages observable.
                 elapsed = time.time() - stage_start
                 results[name] = {"status": "error", "error": str(e), "duration_s": round(elapsed, 2)}
@@ -351,12 +344,28 @@ def _execute_stages(conn, start_idx, stop_idx, run_id, db_path, dry_run, yes, wi
                 log_event(run_id, name, event="error", error=str(e))
 
     finally:
+        usage = conn.execute(
+            """SELECT service, endpoint, COUNT(*) AS attempts, SUM(ok) AS successful,
+                      SUM(credits) AS credits
+               FROM api_calls WHERE run_id = ? GROUP BY service, endpoint
+               ORDER BY service, endpoint""",
+            (run_id,),
+        ).fetchall()
+        model_calls = sum(row["attempts"] for row in usage if row["service"] == "ollama")
+        attempts = sum(row["attempts"] for row in usage)
+        budget = {
+            "api_calls": attempts, "network_calls": attempts - model_calls, "llm_calls": model_calls,
+            "by_endpoint": [dict(row) for row in usage],
+        }
         elapsed_total = time.time() - total_start
         print(f"\n{'='*60}")
         print(f"Pipeline complete in {elapsed_total:.1f}s")
         print(f"Budget: api_calls={budget['api_calls']}, "
               f"network_calls={budget['network_calls']}, "
               f"llm_calls={budget['llm_calls']}")
+        for row in usage:
+            print(f"  {row['service']} {row['endpoint']}  "
+                  f"{row['successful']}/{row['attempts']} successful, {row['credits']:g} recorded credits")
         print(f"{'='*60}")
 
         log_event(run_id, "_summary", event="pipeline_complete",

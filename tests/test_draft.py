@@ -140,6 +140,7 @@ def test_full_cli_dry_run_records_drafts_without_provider_calls(monkeypatch):
             result = runner.invoke(app, ["run", "--dry-run", "--yes"])
             assert result.exit_code == 0, result.output
             assert "ERROR" not in result.output
+            assert "api_calls=0, network_calls=0, llm_calls=0" in result.output
             counts = tuple(conn.execute(
                 "SELECT COUNT(*), COUNT(gmail_draft_id) FROM drafts WHERE status = 'created'",
             ).fetchone())

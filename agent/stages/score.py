@@ -93,8 +93,8 @@ def run(run_id: str = "", dry_run: bool = False, db_path=None, **kwargs) -> dict
 
         profile_chunks = chunk_profile(profile)
         if len(candidates) >= 15 and profile_chunks and not dry_run:
-            profile_vectors = embed(profile_chunks)
-            vectors = embed([text for _, _, text in candidates])
+            profile_vectors = embed(profile_chunks, conn=conn, run_id=run_id)
+            vectors = embed([text for _, _, text in candidates], conn=conn, run_id=run_id)
             ranked = []
             for (job, detail, text), vector in zip(candidates, vectors, strict=True):
                 similarities = sorted(
@@ -123,7 +123,7 @@ def run(run_id: str = "", dry_run: bool = False, db_path=None, **kwargs) -> dict
                     "missing_skills": [],
                     "seniority_fit": "fit",
                     "reasoning": "Offline fixture score",
-                } if dry_run else chat_json(prompt, schema)
+                } if dry_run else chat_json(prompt, schema, conn=conn, run_id=run_id)
                 _correct_score(result, profile)
             except (LLMOutputError, httpx.HTTPError) as exc:
                 conn.execute(
