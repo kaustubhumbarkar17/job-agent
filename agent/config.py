@@ -62,6 +62,8 @@ class EmailConfig(BaseModel):
 class Settings(BaseModel):
     """Top-level settings. Loaded from config.yaml + .env overlay."""
     firecrawl_api_key: str = ""
+    firecrawl_base_url: str = ""
+    firecrawl_self_hosted_api_key: str = ""
     hunter_api_key: str = ""
     ollama_host: str = "http://localhost:11434"
     llm_model: str = "qwen3:14b"
@@ -96,7 +98,8 @@ class Settings(BaseModel):
         settings = cls.from_yaml(path)
         # Overlay env vars
         overrides = {}
-        for key in ("firecrawl_api_key", "hunter_api_key", "ollama_host",
+        for key in ("firecrawl_api_key", "firecrawl_base_url", "firecrawl_self_hosted_api_key",
+                      "hunter_api_key", "ollama_host",
                       "llm_model", "embed_model", "google_credentials_path",
                       "google_token_path", "db_path"):
             env_val = os.environ.get(key.upper())

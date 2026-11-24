@@ -184,6 +184,34 @@ def status():
             print(f"  {status_name}: {count}")
 
 
+@app.command("reconcile-draft")
+def reconcile_draft(
+    draft_id: int = typer.Argument(..., help="Local draft ID awaiting review."),
+    gmail_draft_id: str = typer.Option("", "--gmail-draft-id", help="ID of the matching Gmail draft."),
+    confirmed_missing: bool = typer.Option(False, "--confirmed-missing", help="You checked Gmail and found no match."),
+    db: str = typer.Option(None, "--db", help="Override database path."),
+):
+    """Resolve an uncertain draft after checking Gmail Drafts."""
+    from agent.orchestrator import LockError, acquire_lock, release_lock
+    from agent.stages.draft import reconcile
+
+    gmail_draft_id = gmail_draft_id.strip()
+    if bool(gmail_draft_id) == confirmed_missing:
+        raise typer.BadParameter("Choose exactly one of --gmail-draft-id and --confirmed-missing.")
+
+    try:
+        acquire_lock()
+    except LockError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    try:
+        reconcile(db, draft_id, gmail_draft_id or None)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    finally:
+        release_lock()
+    print(f"Draft {draft_id} reconciled.")
+
+
 @app.command("db-init")
 def db_init(
     db: str = typer.Option(None, "--db", help="Database path to initialize."),

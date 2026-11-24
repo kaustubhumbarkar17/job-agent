@@ -63,10 +63,23 @@ class FirecrawlClient:
     def __init__(
         self, api_key: str | None = None, *, conn: Connection | None = None, run_id: str = "",
     ):
-        self.api_key = api_key or get_settings().firecrawl_api_key
-        if not self.api_key:
+        settings = get_settings()
+        custom_url = settings.firecrawl_base_url.strip()
+        self.base_url = (custom_url or "https://api.firecrawl.dev").rstrip("/")
+        try:
+            url = urlsplit(self.base_url)
+            if (url.scheme not in {"http", "https"} or not url.hostname or url.username is not None
+                    or url.query or url.fragment):
+                raise ValueError
+        except ValueError:
+            raise FirecrawlError("FIRECRAWL_BASE_URL must be an HTTP(S) base URL without credentials, query, or fragment") from None
+        cloud = url.hostname == "api.firecrawl.dev"
+        if cloud and url.scheme != "https":
+            raise FirecrawlError("Firecrawl Cloud requires HTTPS")
+        configured_key = settings.firecrawl_api_key if cloud else settings.firecrawl_self_hosted_api_key
+        self.api_key = api_key or configured_key
+        if cloud and not self.api_key:
             raise FirecrawlError("FIRECRAWL_API_KEY is not set")
-        self.base_url = "https://api.firecrawl.dev"
         self._conn = conn
         self._run_id = run_id
         self._queries_used = 0
@@ -98,7 +111,8 @@ class FirecrawlClient:
         try:
             response = httpx.post(
                 f"{self.base_url}{endpoint}", json=payload,
-                headers={"Authorization": f"Bearer {self.api_key}"}, timeout=120,
+                headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},
+                timeout=120,
             )
             if response.status_code == 429 or response.status_code >= 500:
                 raise _TransientError(f"Firecrawl returned HTTP {response.status_code}")

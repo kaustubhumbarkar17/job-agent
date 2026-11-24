@@ -78,7 +78,7 @@ class InteractiveCheckpoint(Checkpoint):
         return chosen
 
     def confirm(self, message: str) -> bool:
-        return self._questionary.confirm(f"{message} [Y/n]").ask()
+        return bool(self._questionary.confirm(message, default=False).ask())
 
 
 class ScriptedCheckpoint(Checkpoint):

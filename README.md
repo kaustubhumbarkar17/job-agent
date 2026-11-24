@@ -38,6 +38,7 @@ python -m agent.cli draft                # Draft emails (requires Gmail OAuth)
 | `shortlist [--yes]` | Select jobs to pursue |
 | `contacts` | Find hiring contacts |
 | `draft` | Generate email drafts as Gmail drafts |
+| `reconcile-draft <id>` | Resolve an interrupted Gmail draft creation after reviewing Gmail Drafts |
 | `status` | Show job counts per status |
 | `db-init` | Initialize the database |
 
@@ -54,6 +55,8 @@ Each stage is an idempotent function that reads from and writes to SQLite. The L
 Edit `config.yaml` for search terms, scoring weights, and draft limits.
 Secrets go in `.env` (gitignored).
 
+For Firecrawl Cloud, leave `FIRECRAWL_BASE_URL` blank and set `FIRECRAWL_API_KEY`. To use your own Firecrawl server for discovery and scraping, set `FIRECRAWL_BASE_URL=http://localhost:3002` in `.env`. Use the server's base URL, without `/v2`. Set `FIRECRAWL_SELF_HOSTED_API_KEY` only if that server requires a bearer token. The selected endpoint must support v2 search and structured JSON scraping. A self-hosted request failure stays on that endpoint, and the cloud key is reserved for Firecrawl Cloud.
+
 ## Development
 
 ```bash
@@ -69,3 +72,5 @@ ruff check .       # Lint
 3. Download an OAuth 2.0 Desktop client `credentials.json`
 4. Place it at `credentials.json` in this directory
 5. Run `python -m agent.cli draft` — it opens a browser for consent
+
+If drafting reports an uncertain Gmail outcome, compare the local copy in `out/drafts/<id>.txt` with Gmail Drafts. If you find a match, run `python -m agent.cli reconcile-draft <id> --gmail-draft-id <gmail-id>`. If you have confirmed that no matching draft exists, use `--confirmed-missing` to allow the next drafting run to retry it.

@@ -169,8 +169,8 @@ STAGE_REGISTRY: list[dict[str, Any]] = [
     },
     {
         "name": "draft",
-        "input_status": "drafted",
-        "output_status": None,
+        "input_status": ("verified", "drafted"),
+        "output_status": "drafted",
         "module": "agent.stages.draft",
         "fn": "run",
     },

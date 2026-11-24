@@ -70,3 +70,44 @@ def test_scrape_accepts_valid_json_and_rejects_schema_mismatch():
             client.scrape_json("https://example.com/job", schema)
         assert post.call_args.kwargs["json"]["formats"] == [{"type": "json", "schema": schema}]
         assert post.call_count == 2
+
+
+def test_default_cloud_uses_cloud_credentials(monkeypatch):
+    settings = Settings(firecrawl_api_key="cloud-key")
+    monkeypatch.setattr("agent.firecrawl_client.get_settings", lambda: settings)
+    with patch("agent.firecrawl_client.httpx.post", return_value=response(
+        200, {"success": True, "data": {"web": []}},
+    )) as post:
+        FirecrawlClient().search("jobs")
+    assert post.call_args.args[0] == "https://api.firecrawl.dev/v2/search"
+    assert post.call_args.kwargs["headers"] == {"Authorization": "Bearer cloud-key"}
+
+
+@pytest.mark.parametrize("local_key", ["", "local-key"])
+def test_self_hosted_routes_search_and_scrape_without_forwarding_cloud_key(monkeypatch, local_key):
+    settings = Settings(
+        firecrawl_base_url="http://localhost:3002/",
+        firecrawl_api_key="cloud-key",
+        firecrawl_self_hosted_api_key=local_key,
+    )
+    monkeypatch.setattr("agent.firecrawl_client.get_settings", lambda: settings)
+    with patch("agent.firecrawl_client.httpx.post", side_effect=[
+        response(200, {"success": True, "data": {"web": []}}),
+        response(200, {"success": True, "data": {"json": {}}}),
+    ]) as post:
+        client = FirecrawlClient()
+        assert client.search("jobs") == []
+        assert client.scrape_json("https://example.com/job", {"type": "object"}) == {}
+    assert [call.args[0] for call in post.call_args_list] == [
+        "http://localhost:3002/v2/search", "http://localhost:3002/v2/scrape",
+    ]
+    expected = {"Authorization": f"Bearer {local_key}"} if local_key else {}
+    assert all(call.kwargs["headers"] == expected for call in post.call_args_list)
+
+
+def test_firecrawl_endpoint_settings_load_from_environment(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_BASE_URL", "http://localhost:3002")
+    monkeypatch.setenv("FIRECRAWL_SELF_HOSTED_API_KEY", "local-key")
+    settings = Settings.from_yaml_and_env()
+    assert settings.firecrawl_base_url == "http://localhost:3002"
+    assert settings.firecrawl_self_hosted_api_key == "local-key"
