@@ -63,6 +63,8 @@ For Firecrawl Cloud, leave `FIRECRAWL_BASE_URL` blank and set `FIRECRAWL_API_KEY
 
 ## Scoring evaluation
 
+For a selection-only evaluation, open `data/eval/LABELING.md` and mark the jobs you would genuinely pursue. Each checklist entry links to its matching JSON file by ID. Run `python -m agent.cli eval --selection` after saving your choices. Use `--eval-dir` to evaluate a fresh batch in a separate folder. The report shows top-five overlap and how many marked jobs scored zero. Each ranked job includes the rubric breakdown, seniority fit, matched and missing skills, and the model's reason or dealbreaker.
+
 Run `python -m agent.cli eval --synthetic` to exercise the harness offline. For a real evaluation, save 15–20 job descriptions as separate JSON files in `data/eval/`. Each file contains a `job` object with a `title` and the relevant posting details, a `label_score` integer from 0 to 100, and a short `label_note` explaining your judgment. Label the cases before seeing any model output.
 
 With your completed `profile.md` and Ollama running, use `python -m agent.cli eval`. Use `--model` to compare another installed chat model. The report scores every label with the pipeline rubric and shows Spearman correlation, top-five overlap, mean absolute error, and the five largest disagreements. Equal scores share an average Spearman rank. The top-five comparison breaks ties in filename order. The MVP targets are Spearman ≥ 0.70 and at least three shared top-five jobs.

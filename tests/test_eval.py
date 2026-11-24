@@ -76,3 +76,53 @@ def test_invalid_labels_are_rejected_before_scoring(tmp_path, monkeypatch):
     assert result.exit_code == 2
     assert "invalid.json" in result.output
     model.assert_not_called()
+
+
+@pytest.mark.usefixtures("offline_pipeline")
+def test_selection_eval_uses_checkboxes_and_reports_top_five(monkeypatch):
+    directory = Path("data/eval")
+    directory.mkdir()
+    Path("profile.md").write_text("Python", encoding="utf-8")
+    for index in range(1, 7):
+        (directory / f"{index}.json").write_text(json.dumps({
+            "job": {"title": f"Engineer {index}"}, "label_score": None, "label_note": "",
+        }), encoding="utf-8")
+
+    checklist = directory / "LABELING.md"
+    checklist.write_text("\n".join(f"- [ ] [{index}]({index}.json) Engineer {index}" for index in range(1, 7)))
+    model = Mock(side_effect=[
+        {
+            "score": 99,
+            "breakdown": {"skills": 0, "seniority": index, "domain": 0, "location": 0},
+            "matched_skills": [],
+            "missing_skills": ["Kubernetes"],
+            "seniority_fit": "under" if index == 1 else "fit",
+            "dealbreaker": "Role requires eight years of experience" if index == 1 else " None ",
+            "reasoning": "Fixture review",
+        }
+        for index in range(1, 7)
+    ])
+    monkeypatch.setattr(score, "chat_json", model)
+    runner = CliRunner()
+    empty = runner.invoke(app, ["eval", "--selection"])
+    assert empty.exit_code == 2
+    assert "Mark at least one job" in empty.output
+    model.assert_not_called()
+
+    checklist.write_text(checklist.read_text().replace("- [ ] [1]", "- [x] [1]").replace(
+        "- [ ] [6]", "- [X] [6]",
+    ))
+    result = runner.invoke(app, ["eval", "--selection"])
+    assert result.exit_code == 0, result.output
+    assert "You marked: 2" in result.output
+    assert "Marked jobs in the model's top 5: 1/5" in result.output
+    assert "Your marked jobs found in the top 5: 1/2" in result.output
+    assert "Marked jobs scored zero: 1/2" in result.output
+    assert "1. [6] Engineer 6 · model 6 · marked" in result.output
+    assert "6. [1] Engineer 1 · model 0 · marked" in result.output
+    assert "Breakdown: skills 0, seniority 0, domain 0, location 0" in result.output
+    assert "Seniority fit: under" in result.output
+    assert "Missing skills: Kubernetes" in result.output
+    assert "Dealbreaker: Role requires eight years of experience" in result.output
+    assert "Dealbreaker: None reported" in result.output
+    assert "Reasoning: Fixture review" in result.output

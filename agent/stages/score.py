@@ -20,9 +20,12 @@ def _correct_score(result: dict, profile: str) -> None:
     valid = [skill for skill in matched if skill.casefold() in profile_lower]
     breakdown = result["breakdown"]
     breakdown["skills"] = round(breakdown["skills"] * len(valid) / len(matched)) if matched else 0
-    if result.get("dealbreaker") is not None:
+    dealbreaker = result.get("dealbreaker")
+    if isinstance(dealbreaker, str) and dealbreaker.strip().casefold() in {"", "none", "null"}:
+        dealbreaker = None
+    if dealbreaker is not None:
         breakdown = dict.fromkeys(breakdown, 0)
-    result.update(matched_skills=valid, breakdown=breakdown, score=sum(breakdown.values()))
+    result.update(matched_skills=valid, breakdown=breakdown, score=sum(breakdown.values()), dealbreaker=dealbreaker)
 
 
 def load_rubric() -> tuple[str, dict]:
