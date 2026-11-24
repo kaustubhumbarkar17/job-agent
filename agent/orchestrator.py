@@ -134,14 +134,14 @@ STAGE_REGISTRY: list[dict[str, Any]] = [
     },
     {
         "name": "scrape",
-        "input_status": "picked",
+        "input_status": ("picked", "scrape_failed"),
         "output_status": "scraped",
         "module": "agent.stages.scrape",
         "fn": "run",
     },
     {
         "name": "score",
-        "input_status": "scraped",
+        "input_status": ("scraped", "score_failed"),
         "output_status": "scored",
         "module": "agent.stages.score",
         "fn": "run",
@@ -304,9 +304,11 @@ def _execute_stages(conn, start_idx, stop_idx, run_id, db_path, dry_run, yes, wi
 
             # Check if there are rows to process
             if input_status:
+                statuses = (input_status,) if isinstance(input_status, str) else input_status
+                placeholders = ", ".join("?" for _ in statuses)
                 count = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM jobs WHERE status = ?",
-                    (input_status,),
+                    f"SELECT COUNT(*) as cnt FROM jobs WHERE status IN ({placeholders})",
+                    statuses,
                 ).fetchone()["cnt"]
                 if count == 0:
                     results[name] = {"skipped": True, "reason": f"No {input_status} rows"}

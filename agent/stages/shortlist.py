@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent.checkpoints import AutoCheckpoint, Checkpoint, InteractiveCheckpoint
+from agent.config import get_settings
 from agent.db import connect, jobs_by_status, set_status
 
 
@@ -35,7 +36,9 @@ def run(
         })
 
     checkpoint = checkpoint or (AutoCheckpoint() if yes else InteractiveCheckpoint())
-    selected = checkpoint.select(items, label="Select jobs to pursue")
+    threshold = get_settings().scoring.min_score_for_shortlist
+    preselected = [job["id"] for job in scored_sorted if (job["score"] or 0) >= threshold]
+    selected = checkpoint.select(items, preselected=preselected, label="Select jobs to pursue")
 
     for job_id in selected:
         set_status(conn, job_id, "shortlisted")

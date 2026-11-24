@@ -5,11 +5,10 @@ Provides a single method: chat_json that returns schema-validated JSON.
 from __future__ import annotations
 
 import json
-import time
-from typing import Any, Optional
+from typing import Any
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from jsonschema import ValidationError, validate
 
 from agent.config import settings
 
@@ -21,9 +20,9 @@ class LLMOutputError(Exception):
 def chat_json(
     prompt: str,
     schema: dict[str, Any],
-    system: Optional[str] = None,
+    system: str | None = None,
     temperature: float = 0.0,
-    model: Optional[str] = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Call Ollama /api/chat and return a validated JSON dict.
 
@@ -43,6 +42,7 @@ def chat_json(
             "num_ctx": 8192,
         },
         "stream": False,
+        "think": False,
     }
 
     host = settings.ollama_host
@@ -50,23 +50,20 @@ def chat_json(
 
     for attempt in range(2):
         try:
-            start = time.perf_counter()
             resp = httpx.post(f"{host}/api/chat", json=payload, timeout=180)
-            latency_ms = int((time.perf_counter() - start) * 1000)
             resp.raise_for_status()
             data = resp.json()
             content = data["message"]["content"].strip()
             parsed = json.loads(content)
+            validate(parsed, schema)
             return parsed
-        except (json.JSONDecodeError, KeyError, ValidationError) as e:
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError, ValidationError) as e:
             last_err = LLMOutputError(
                 f"Attempt {attempt + 1}: Invalid JSON — {e}"
             )
             if attempt == 0:
                 # Retry with a stronger nudge
-                payload["messages"] = [
-                    {"role": "user", "content": "Return valid JSON only. " + payload["messages"][0]["content"]}
-                ]
+                payload["messages"][-1]["content"] = "Return valid JSON only. " + prompt
             continue
         except httpx.HTTPError as e:
             raise LLMOutputError(f"Ollama unreachable: {e}")
@@ -76,8 +73,8 @@ def chat_json(
 
 def chat_raw(
     prompt: str,
-    system: Optional[str] = None,
-    model: Optional[str] = None,
+    system: str | None = None,
+    model: str | None = None,
 ) -> str:
     """Call Ollama and return raw text (no schema validation)."""
     model_name = model or settings.llm_model

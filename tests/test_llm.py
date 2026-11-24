@@ -1,5 +1,4 @@
 """Tests for agent/llm.py using mocked HTTP."""
-import json
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -22,14 +21,15 @@ class TestChatJson:
             result = chat_json('Test', schema)
             assert result == {"ok": True}
 
-    def test_invalid_then_valid_retries(self):
+    @pytest.mark.parametrize("invalid", ["not json", '{"answer": "wrong type"}'])
+    def test_invalid_then_valid_retries(self, invalid):
         """First call returns bad JSON, second returns valid."""
         schema = {"type": "object", "properties": {"answer": {"type": "integer"}}}
         with patch("agent.llm.httpx.post") as mock:
             side_effects = [
                 MagicMock(
                     status_code=200,
-                    json=lambda: {"message": {"content": 'not json', "role": "assistant"}},
+                    json=lambda: {"message": {"content": invalid, "role": "assistant"}},
                     raise_for_status=MagicMock(),
                 ),
                 MagicMock(

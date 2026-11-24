@@ -61,17 +61,21 @@ class InteractiveCheckpoint(Checkpoint):
         if not items:
             return []
 
-        labels = [item["label"] for item in items]
+        defaults = set(preselected or [])
+        choices = [
+            self._questionary.Choice(item["label"], value=item["id"], checked=item["id"] in defaults)
+            for item in items
+        ]
         chosen = self._questionary.checkbox(
             f"{label} (Space to select, Enter to confirm):",
-            choices=labels,
+            choices=choices,
         ).ask()
 
         if chosen is None:
             print("  Cancelled.")
             return []
 
-        return [item["id"] for item in items if item["label"] in chosen]
+        return chosen
 
     def confirm(self, message: str) -> bool:
         return self._questionary.confirm(f"{message} [Y/n]").ask()

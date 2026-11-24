@@ -9,6 +9,7 @@ description = "Job-Hunt Agent: discover, score, and draft emails for job applica
 requires-python = ">=3.12"
 dependencies = [
     "httpx",
+    "jsonschema>=4",
     "pydantic>=2",
     "pyyaml",
     "python-dotenv",

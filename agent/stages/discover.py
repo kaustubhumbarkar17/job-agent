@@ -5,11 +5,19 @@ normalizes results, applies blocklists, and upserts into the DB.
 """
 from __future__ import annotations
 
+from contextlib import closing
+from itertools import islice, product
 from pathlib import Path
+from urllib.parse import quote
 
 from agent.config import get_settings
 from agent.db import connect, upsert_job
-from agent.firecrawl_client import BudgetExceeded, FirecrawlClient, FirecrawlError
+from agent.firecrawl_client import (
+    BudgetExceeded,
+    FirecrawlClient,
+    FirecrawlError,
+    SearchResult,
+)
 
 
 def run(
@@ -21,58 +29,39 @@ def run(
 ) -> dict:
     """Run the discover stage. Returns summary stats."""
     settings = get_settings()
-    conn = connect(db_path or settings.db_path)
-    client = FirecrawlClient() if not dry_run else None
-
-    window = window or settings.search.window
-    discovered = 0
-    blocked = 0
-    queries_run = 0
-    max_queries = settings.search.max_queries_per_run
-
-    for title in settings.search.titles:
-        if queries_run >= max_queries:
-            break
-        for location in settings.search.locations:
-            if queries_run >= max_queries:
-                break
+    with closing(connect(db_path or settings.db_path)) as conn:
+        client = None if dry_run else FirecrawlClient(conn=conn, run_id=run_id)
+        discovered = blocked = queries_run = 0
+        window = window or settings.search.window
+        combinations = product(settings.search.titles, settings.search.locations)
+        for title, location in islice(combinations, settings.search.max_queries_per_run):
             query = f'"{title}" {location} jobs posted in the last {window[:-1]} day(s)'
-            queries_run += 1
-
-            if dry_run or client is None:
-                url = f"https://example.com/job-{title}-{location}"
-                upsert_job(
-                    conn, url, title=title, company="Example",
-                    location=location, source="firecrawl", run_id=run_id,
-                )
-                discovered += 1
-                continue
-
             try:
-                results = client.search(query, limit=settings.search.results_per_query, time_window=window)
-                for r in results:
-                    title_lower = (r.title or "").lower()
-                    company_lower = (r.company or "").lower()
-                    if any(w in title_lower for w in settings.search.blocklist_title_words):
-                        blocked += 1
-                        continue
-                    if any(c in company_lower for c in settings.search.blocklist_companies):
-                        blocked += 1
-                        continue
-                    upsert_job(
-                        conn, r.url, title=r.title, company=r.company,
-                        location=r.location, source=r.source,
-                        posted_at=r.posted_at, run_id=run_id,
-                    )
-                    discovered += 1
+                results = client.search(query, settings.search.results_per_query, window) if client else [
+                    SearchResult(title=title, company="Example", location=location,
+                                 url=f"https://example.com/job-{quote(title)}-{quote(location)}"),
+                ]
             except BudgetExceeded:
                 break
-            except FirecrawlError as e:
-                print(f"  Warning: query '{query}' failed: {e}")
+            except FirecrawlError as exc:
+                queries_run += 1
+                print(f"  Warning: query '{query}' failed: {exc}")
+                continue
 
-    return {
-        "queries_run": queries_run,
-        "discovered": discovered,
-        "blocked": blocked,
-        "run_id": run_id,
-    }
+            queries_run += 1
+            for result in results:
+                if any(word.casefold() in result.title.casefold()
+                       for word in settings.search.blocklist_title_words) or any(
+                    company.casefold() in (result.company or "").casefold()
+                    for company in settings.search.blocklist_companies
+                ):
+                    blocked += 1
+                    continue
+                job_id = upsert_job(
+                    conn, result.url, title=result.title, company=result.company,
+                    location=result.location or location, source=result.source,
+                    posted_at=result.posted_at, run_id=run_id, insert_only=True,
+                )
+                discovered += job_id != -1
+
+    return {"queries_run": queries_run, "discovered": discovered, "blocked": blocked, "run_id": run_id}

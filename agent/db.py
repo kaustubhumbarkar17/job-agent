@@ -5,10 +5,8 @@ All helpers are idempotent and use SQLite WAL mode with foreign keys enabled.
 from __future__ import annotations
 
 import hashlib
-import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Optional
 
 import numpy as np
 
@@ -104,16 +102,20 @@ def upsert_job(
     location: str = "",
     source: str = "",
     posted_at: str = "",
-    run_id: Optional[str] = None,
+    run_id: str | None = None,
+    *,
+    insert_only: bool = False,
 ) -> int:
-    """Insert or ignore a job. Returns the job ID."""
+    """Insert or ignore a job. Returns the job ID or -1 for an existing job in insert-only mode."""
     h = url_hash(url)
-    conn.execute(
+    cursor = conn.execute(
         """INSERT OR IGNORE INTO jobs (url_hash, url, title, company, location, source, posted_at, run_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (h, url, title, company, location, source, posted_at, run_id),
     )
     conn.commit()
+    if insert_only and cursor.rowcount == 0:
+        return -1
     row = conn.execute("SELECT id FROM jobs WHERE url_hash = ?", (h,)).fetchone()
     return row["id"] if row else -1
 
@@ -122,7 +124,7 @@ def set_status(
     conn: sqlite3.Connection,
     job_id: int,
     status: str,
-    reason: Optional[str] = None,
+    reason: str | None = None,
 ) -> None:
     """Set a job's status. Validates against allowed transitions."""
     row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -169,7 +171,9 @@ def save_embedding(
     blob = np.asarray(vector, dtype=np.float32).tobytes()
     conn.execute(
         """INSERT INTO embeddings (kind, ref_id, model, text_hash, vector)
-           VALUES (?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(kind, ref_id, model) DO UPDATE SET
+               text_hash = excluded.text_hash, vector = excluded.vector""",
         (kind, ref_id, model, text_hash, blob),
     )
     conn.commit()
@@ -179,7 +183,7 @@ def load_embeddings(
     conn: sqlite3.Connection,
     kind: str,
     model: str,
-    text: Optional[str] = None,
+    text: str | None = None,
 ) -> list[tuple[int, list[float]]]:
     """Load embeddings. If text is provided, only return rows whose
     stored text_hash matches the hash of the given text."""

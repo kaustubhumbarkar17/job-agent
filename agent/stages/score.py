@@ -1,183 +1,145 @@
-"""Stage 4: Score — rank scraped jobs against the profile.
-
-Two-pass scoring:
-  Pass 1: Embedding pre-filter (keep top embed_keep_fraction by similarity)
-  Pass 2: LLM rubric scoring (one call per surviving job)
-
-Post-checks in code:
-  - Recompute score as sum of breakdown (LLMs are bad at arithmetic)
-  - Drop hallucinated matched_skills not in profile.md, reduce skills subscore proportionally
-  - If dealbreaker is non-null, force score to 0
-"""
+"""Rank scraped postings and write a shortlist for human review."""
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from contextlib import closing
+from pathlib import Path
 
-import numpy as np
+import httpx
 
 from agent.config import get_settings
-from agent.db import (
-    connect,
-    jobs_by_status,
-    load_embeddings,
-    save_embedding,
-    set_status,
-)
-from agent.embeddings import chunk_profile, embed, cosine_similarity, similarity
-from agent.llm import chat_json, LLMOutputError
+from agent.db import connect, jobs_by_status, save_embedding
+from agent.embeddings import chunk_profile, cosine_similarity, embed
+from agent.llm import LLMOutputError, chat_json
 
 
-SCORE_SCHEMA = {
-    "type": "object",
-    "required": ["score", "breakdown", "matched_skills", "missing_skills", "seniority_fit", "reasoning"],
-    "properties": {
-        "score": {"type": "integer", "minimum": 0, "maximum": 100},
-        "breakdown": {
-            "type": "object",
-            "required": ["skills", "seniority", "domain", "location"],
-            "properties": {
-                "skills": {"type": "integer"},
-                "seniority": {"type": "integer"},
-                "domain": {"type": "integer"},
-                "location": {"type": "integer"},
-            },
-        },
-        "matched_skills": {"type": "array", "items": {"type": "string"}},
-        "missing_skills": {"type": "array", "items": {"type": "string"}},
-        "seniority_fit": {"type": "string", "enum": ["under", "fit", "over"]},
-        "dealbreaker": {"type": ["string", "null"]},
-        "reasoning": {"type": "string", "maxLength": 200},
-    },
-}
+def _correct_score(result: dict, profile: str) -> None:
+    matched = result["matched_skills"]
+    profile_lower = profile.casefold()
+    valid = [skill for skill in matched if skill.casefold() in profile_lower]
+    breakdown = result["breakdown"]
+    breakdown["skills"] = round(breakdown["skills"] * len(valid) / len(matched)) if matched else 0
+    if result.get("dealbreaker") is not None:
+        breakdown = dict.fromkeys(breakdown, 0)
+    result.update(matched_skills=valid, breakdown=breakdown, score=sum(breakdown.values()))
 
 
-def _load_profile(conn: Any) -> str:
-    """Load profile.md from disk."""
-    try:
-        return open("profile.md").read()
-    except FileNotFoundError:
-        return ""
+def _write_shortlist(jobs, path: Path) -> None:
+    """Write a ranked table and details for each available scored posting."""
+    def cell(value) -> str:
+        return " ".join(str(value or "").split()).replace("|", "\\|")
 
-
-def _filter_hallucinated(matched_skills: list[str], profile_md: str) -> tuple[list[str], int, int]:
-    """Filter matched_skills against profile.md.
-
-    Returns (valid_skills, valid_count, total_count).
-    Applies proportional reduction for hallucinated skills.
-    """
-    profile_lower = profile_md.lower()
-    valid = [s for s in matched_skills if s.lower() in profile_lower]
-    return valid, len(valid), len(matched_skills)
-
-
-def _recompute_score(breakdown: dict[str, int], matched_skills: list[str],
-                     profile_md: str, dealbreaker: Optional[str]) -> tuple[dict[str, int], int]:
-    """Recompute score from breakdown, applying hallucination filter.
-
-    Returns (corrected_breakdown, final_score).
-    """
-    valid_skills, valid_count, total_count = _filter_hallucinated(matched_skills, profile_md)
-
-    corrected = dict(breakdown)
-    if total_count > 0:
-        original_skills = breakdown.get("skills", 0)
-        corrected["skills"] = round(original_skills * (valid_count / total_count))
-
-    score = sum(corrected.values())
-    if dealbreaker:
-        score = 0
-        for k in corrected:
-            corrected[k] = 0
-
-    return corrected, score
+    lines = [
+        "# Ranked shortlist", "",
+        "| Rank | Score | Title | Company | Location | Matched | Missing | Why | Link |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    details = []
+    for rank, job in enumerate(sorted(jobs, key=lambda row: (-row["score"], row["id"])), 1):
+        result = json.loads(job["score_json"] or "{}")
+        score = job["score"]
+        matched = ", ".join(result.get("matched_skills", []))
+        missing = ", ".join(result.get("missing_skills", []))
+        why = result.get("reasoning", "")
+        values = (job["title"], job["company"], job["location"], matched, missing, why, job["url"])
+        lines.append(f"| {rank} | {score} | " + " | ".join(map(cell, values)) + " |")
+        details.extend([
+            "", f"## {rank}. {cell(job['title'])} · {cell(job['company'])}", "",
+            f"- Score: {score}",
+            f"- Breakdown: {', '.join(f'{k} {v}' for k, v in result.get('breakdown', {}).items())}",
+            f"- Matched: {cell(matched) or '—'}", f"- Missing: {cell(missing) or '—'}",
+            f"- Reasoning: {cell(why) or '—'}",
+            f"- Dealbreaker: {cell(result.get('dealbreaker')) or '—'}",
+            f"- Posting: {cell(job['url'])}",
+        ])
+    if not jobs:
+        lines.extend(["", "No postings scored."])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines + details) + "\n", encoding="utf-8")
 
 
 def run(run_id: str = "", dry_run: bool = False, db_path=None, **kwargs) -> dict:
-    """Run the scoring stage. Returns scored job IDs and rejected count."""
+    """Score picked postings and retry prior scoring failures."""
     settings = get_settings()
-    conn = connect(db_path or settings.db_path)
-    profile_md = _load_profile(conn)
+    with closing(connect(db_path or settings.db_path)) as conn:
+        jobs = jobs_by_status(conn, "scraped") + jobs_by_status(conn, "score_failed")
+        if not jobs:
+            return {"scored": 0, "rejected_embed": 0, "failed": 0, "total": 0}
 
-    scraped = jobs_by_status(conn, "scraped")
-    if not scraped:
-        return {"scored": 0, "rejected_embed": 0, "failed": 0}
+        profile_path = Path("profile.md")
+        profile = profile_path.read_text(encoding="utf-8") if profile_path.exists() else ""
+        schema = json.loads(Path("schemas/score.json").read_text(encoding="utf-8"))
+        template = Path("prompts/score.md").read_text(encoding="utf-8")
+        candidates = []
+        failed = scored = rejected = 0
 
-    # Pass 1: Embedding pre-filter
-    if len(scraped) >= 15:
-        # Build job texts and embed
-        job_texts = []
-        job_ids = []
-        for job in scraped:
-            detail = json.loads(job["detail_json"]) if job["detail_json"] else {}
-            text = f"{job['title']} {' '.join(detail.get('must_have_skills', []))} {' '.join(detail.get('responsibilities', []))}"
-            job_texts.append(text)
-            job_ids.append(job["id"])
+        for job in jobs:
+            try:
+                detail = json.loads(job["detail_json"] or "{}")
+                if not isinstance(detail, dict):
+                    raise TypeError("Expected job details as a JSON object")
+                skills = detail.get("must_have_skills", [])
+                duties = detail.get("responsibilities", [])
+                text = " ".join([job["title"] or "", *skills, *duties])
+            except (ValueError, TypeError) as exc:
+                conn.execute(
+                    "UPDATE jobs SET status = 'score_failed', status_reason = ? WHERE id = ?",
+                    (str(exc), job["id"]),
+                )
+                failed += 1
+            else:
+                candidates.append((job, detail, text))
+        conn.commit()
 
-        # Embed profile
-        profile_chunks = chunk_profile(profile_md)
-        profile_matrix = np.array(embed(profile_chunks), dtype=np.float32) if profile_chunks else np.array([])
-
-        for i, text in enumerate(job_texts):
-            sim = similarity(text, profile_matrix) if len(profile_matrix) > 0 else 0.0
-            save_embedding(conn, "job", job_ids[i], settings.embed_model, text, list(embed([text])[0]))
-
-        # Keep top embed_keep_fraction
-        embeddings = load_embeddings(conn, "job", settings.embed_model)
-        sims = [(ref_id, similarity(
-            next((t for t, jid in zip(job_texts, job_ids) if jid == ref_id), ""),
-            profile_matrix
-        )) for ref_id, _ in embeddings]
-        sims.sort(key=lambda x: x[1], reverse=True)
-        keep_count = max(1, int(len(sims) * settings.scoring.embed_keep_fraction))
-        kept_ids = {s[0] for s in sims[:keep_count]}
-
-        for job in scraped:
-            if job["id"] not in kept_ids:
-                set_status(conn, job["id"], "rejected", reason="low_similarity")
-    else:
-        # Skip embedding filter for < 15 jobs; embed all
-        for job in scraped:
-            detail = json.loads(job["detail_json"]) if job["detail_json"] else {}
-            text = f"{job['title']} {' '.join(detail.get('must_have_skills', []))}"
-            vec = embed([text])
-            save_embedding(conn, "job", job["id"], settings.embed_model, text, list(vec[0]))
-
-    # Pass 2: LLM rubric scoring
-    scored = 0
-    failed = 0
-    profile_md = _load_profile(conn)
-
-    for job in jobs_by_status(conn, "scraped"):
-        detail = json.loads(job["detail_json"]) if job["detail_json"] else {}
-        job_json = json.dumps(detail)
-        prompt_template = open("prompts/score.md").read()
-        prompt = prompt_template.replace("{profile_md}", profile_md).replace("{job_json}", job_json)
-
-        try:
-            result = chat_json(prompt, SCORE_SCHEMA)
-            breakdown = result.get("breakdown", {})
-            matched = result.get("matched_skills", [])
-            dealbreaker = result.get("dealbreaker")
-
-            corrected, final_score = _recompute_score(
-                breakdown, matched, profile_md, dealbreaker
+        profile_chunks = chunk_profile(profile)
+        if len(candidates) >= 15 and profile_chunks and not dry_run:
+            profile_vectors = embed(profile_chunks)
+            vectors = embed([text for _, _, text in candidates])
+            ranked = []
+            for (job, detail, text), vector in zip(candidates, vectors, strict=True):
+                similarities = sorted(
+                    (cosine_similarity(vector, chunk) for chunk in profile_vectors), reverse=True,
+                )[:3]
+                similarity = sum(similarities) / len(similarities)
+                save_embedding(conn, "job", job["id"], settings.embed_model, text, list(vector))
+                conn.execute("UPDATE jobs SET embed_sim = ? WHERE id = ?", (similarity, job["id"]))
+                ranked.append((similarity, job, detail, text))
+            ranked.sort(key=lambda entry: (-entry[0], entry[1]["id"]))
+            keep = max(1, int(len(ranked) * settings.scoring.embed_keep_fraction))
+            candidates = [(job, detail, text) for _, job, detail, text in ranked[:keep]]
+            rejected = len(ranked) - keep
+            conn.executemany(
+                "UPDATE jobs SET status = 'rejected', status_reason = 'low_similarity' WHERE id = ?",
+                [(job["id"],) for _, job, _, _ in ranked[keep:]],
             )
+            conn.commit()
 
-            result["breakdown"] = corrected
-            result["score"] = final_score
+        for job, detail, _ in candidates:
+            prompt = template.replace("{profile_md}", profile).replace("{job_json}", json.dumps(detail))
+            try:
+                result = {
+                    "breakdown": {"skills": 0, "seniority": 25, "domain": 20, "location": 15},
+                    "matched_skills": [],
+                    "missing_skills": [],
+                    "seniority_fit": "fit",
+                    "reasoning": "Offline fixture score",
+                } if dry_run else chat_json(prompt, schema)
+                _correct_score(result, profile)
+            except (LLMOutputError, httpx.HTTPError) as exc:
+                conn.execute(
+                    "UPDATE jobs SET status = 'score_failed', status_reason = ? WHERE id = ?",
+                    (str(exc), job["id"]),
+                )
+                failed += 1
+            else:
+                conn.execute(
+                    """UPDATE jobs SET score = ?, score_json = ?, status = 'scored',
+                       status_reason = NULL WHERE id = ?""",
+                    (result["score"], json.dumps(result), job["id"]),
+                )
+                scored += 1
+            conn.commit()
 
-            conn.execute(
-                "UPDATE jobs SET score = ?, score_json = ?, status = ? WHERE id = ?",
-                (final_score, json.dumps(result), "scored", job["id"]),
-            )
-            scored += 1
-        except (LLMOutputError, Exception) as e:
-            conn.execute(
-                "UPDATE jobs SET status = ?, status_reason = ? WHERE id = ?",
-                ("score_failed", str(e), job["id"]),
-            )
-            failed += 1
-
-    conn.commit()
-    return {"scored": scored, "failed": failed, "total": len(scraped)}
+        output = Path("out/dry-run/shortlist.md" if dry_run else "out/shortlist.md")
+        _write_shortlist(jobs_by_status(conn, "scored"), output)
+    return {"scored": scored, "rejected_embed": rejected, "failed": failed, "total": len(jobs)}
