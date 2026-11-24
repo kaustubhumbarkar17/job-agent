@@ -6,17 +6,17 @@ normalizes results, applies blocklists, and upserts into the DB.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from agent.config import get_settings
-from agent.db import connect, upsert_job, url_hash
-from agent.firecrawl_client import FirecrawlClient, BudgetExceeded
+from agent.db import connect, upsert_job
+from agent.firecrawl_client import BudgetExceeded, FirecrawlClient, FirecrawlError
 
 
 def run(
     run_id: str = "",
     dry_run: bool = False,
-    db_path: Optional[str | Path] = None,
+    db_path: str | Path | None = None,
+    window: str | None = None,
     **kwargs,
 ) -> dict:
     """Run the discover stage. Returns summary stats."""
@@ -24,6 +24,7 @@ def run(
     conn = connect(db_path or settings.db_path)
     client = FirecrawlClient() if not dry_run else None
 
+    window = window or settings.search.window
     discovered = 0
     blocked = 0
     queries_run = 0
@@ -35,7 +36,7 @@ def run(
         for location in settings.search.locations:
             if queries_run >= max_queries:
                 break
-            query = f'"{title}" {location} jobs posted last 7 days'
+            query = f'"{title}" {location} jobs posted in the last {window[:-1]} day(s)'
             queries_run += 1
 
             if dry_run or client is None:
@@ -48,7 +49,7 @@ def run(
                 continue
 
             try:
-                results = client.search(query, limit=settings.search.results_per_query)
+                results = client.search(query, limit=settings.search.results_per_query, time_window=window)
                 for r in results:
                     title_lower = (r.title or "").lower()
                     company_lower = (r.company or "").lower()
@@ -66,7 +67,7 @@ def run(
                     discovered += 1
             except BudgetExceeded:
                 break
-            except Exception as e:
+            except FirecrawlError as e:
                 print(f"  Warning: query '{query}' failed: {e}")
 
     return {

@@ -13,22 +13,26 @@ Features:
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from uuid import uuid4
 
-from agent.checkpoints import AutoCheckpoint, Checkpoint, ScriptedCheckpoint
+from agent.checkpoints import AutoCheckpoint, Checkpoint, InteractiveCheckpoint
 from agent.config import get_settings
-from agent.db import connect, get_jobs_by_status_count, STATUS_TRANSITIONS
+from agent.db import connect, get_jobs_by_status_count
 
 # ---------------------------------------------------------------------------
 # Lock manager — single-run lock file
 # ---------------------------------------------------------------------------
 
 _LOCK_PATH = Path("data/.lock")
+_lock_directory_fd: int | None = None
 
 
 class LockError(Exception):
@@ -41,27 +45,36 @@ def acquire_lock(force: bool = False) -> None:
     Raises LockError if a non-stale lock exists and force=False.
     Stale = older than 6 hours.
     """
-    if _LOCK_PATH.exists():
-        mtime = datetime.fromtimestamp(_LOCK_PATH.stat().st_mtime, tz=timezone.utc)
-        stale_after = datetime.now(tz=timezone.utc).replace(hour=0) - __import__("datetime").timedelta(hours=6)
-        if mtime >= stale_after:
-            raise LockError(
-                f"Another run is active ({_LOCK_PATH}). "
-                f"Use --force-unlock to clear."
-            )
-        else:
-            os.remove(_LOCK_PATH)  # Clear stale lock
-
-    _LOCK_PATH.write_text(
-        f"locked at {datetime.now(timezone.utc).isoformat()}\n",
-        encoding="utf-8",
-    )
+    global _lock_directory_fd
+    _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    directory_fd = os.open(_LOCK_PATH.parent, os.O_RDONLY)
+    try:
+        try:
+            fcntl.flock(directory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise LockError(f"Another run holds {_LOCK_PATH}.") from exc
+        if _LOCK_PATH.exists():
+            age = time.time() - _LOCK_PATH.stat().st_mtime
+            if not force or age <= 6 * 3600:
+                raise LockError(f"Found {_LOCK_PATH}. Use --force-unlock for a stale lock.")
+            _LOCK_PATH.unlink()
+        with _LOCK_PATH.open("x", encoding="utf-8") as lock:
+            lock.write(f"locked at {datetime.now(UTC).isoformat()}\n")
+    except (OSError, LockError):
+        os.close(directory_fd)
+        raise
+    _lock_directory_fd = directory_fd
 
 
 def release_lock() -> None:
-    """Remove the lock file if it exists."""
-    if _LOCK_PATH.exists():
-        os.remove(_LOCK_PATH)
+    """Remove the sentinel before relinquishing the directory lock."""
+    global _lock_directory_fd
+    if _lock_directory_fd is not None:
+        try:
+            _LOCK_PATH.unlink(missing_ok=True)
+        finally:
+            os.close(_lock_directory_fd)
+            _lock_directory_fd = None
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +90,7 @@ def setup_run_logging(run_id: str) -> None:
     path = _LOG_DIR / f"run-{run_id}.jsonl"
     path.write_text(
         json.dumps({"event": "run_start", "run_id": run_id,
-                     "ts": datetime.now(timezone.utc).isoformat()}) + "\n",
+                     "ts": datetime.now(UTC).isoformat()}) + "\n",
         encoding="utf-8",
     )
 
@@ -87,12 +100,12 @@ def log_event(run_id: str, stage: str, **kwargs: Any) -> None:
     _LOG_DIR.mkdir(exist_ok=True)
     path = _LOG_DIR / f"run-{run_id}.jsonl"
     entry = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "stage": stage,
         **kwargs,
     }
-    path.write_text(path.read_text(encoding="utf-8") + "\n" + json.dumps(entry),
-                     encoding="utf-8")
+    with path.open("a", encoding="utf-8") as log:
+        log.write(json.dumps(entry) + "\n")
 
 # ---------------------------------------------------------------------------
 # Stage registry
@@ -204,11 +217,10 @@ def _run_with_retries(fn: Callable, stage_name: str, **kwargs: Any) -> dict[str,
             print(f"  [{stage_name}] Retry {attempt}/{max_attempts-1} after {delay}s...")
             time.sleep(delay)
 
-        start = time.time()
         try:
             result = fn(**kwargs)
             return result
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - stages have independent failure boundaries.
             errors.append(str(e))
             last_exc = e
             print(f"  [{stage_name}] Attempt {attempt+1} failed: {e}")
@@ -230,8 +242,10 @@ def run_pipeline(
     dry_run: bool = False,
     yes: bool = False,
     db_path: str | Path | None = None,
-    run_id: str = "run-1",
+    run_id: str | None = None,
     force_unlock: bool = False,
+    window: str | None = None,
+    checkpoint: Checkpoint | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline (or a slice). Returns per-stage results.
 
@@ -239,34 +253,48 @@ def run_pipeline(
     Handles single-run lock, retries, and logging.
     """
     settings = get_settings()
-    conn = connect(db_path or settings.db_path)
+    stage_names = [stage["name"] for stage in STAGE_REGISTRY]
+    if start not in stage_names or (stop is not None and stop not in stage_names):
+        raise ValueError(f"Unknown stage. Choose from {', '.join(stage_names)}.")
+    start_idx = stage_names.index(start)
+    stop_idx = stage_names.index(stop) + 1 if stop is not None else len(stage_names)
+    if start_idx >= stop_idx:
+        raise ValueError("The start stage must precede or equal the stop stage.")
 
-    # Acquire lock (skip in dry-run mode)
+    window = settings.search.window if window is None else window
+    if window not in {"1d", "7d"}:
+        raise ValueError("Search window must be 1d or 7d.")
+    run_id = run_id or uuid4().hex
+    db_path = db_path or ("data/dry-run.db" if dry_run else settings.db_path)
+    if dry_run and Path(db_path).resolve() == Path(settings.db_path).resolve():
+        raise ValueError("Dry runs require a database separate from the live database.")
+
     if not dry_run:
+        acquire_lock(force=force_unlock)
+    try:
+        conn = connect(db_path)
         try:
-            acquire_lock(force=force_unlock)
-        except LockError as e:
-            print(f"Lock error: {e}")
-            return {"error": str(e)}
+            setup_run_logging(run_id)
+            conn.execute("INSERT INTO runs (run_id, window) VALUES (?, ?)", (run_id, window))
+            conn.commit()
+            return _execute_stages(
+                conn, start_idx, stop_idx, run_id, db_path, dry_run, yes, window,
+                checkpoint or (AutoCheckpoint() if yes else InteractiveCheckpoint()),
+            )
+        finally:
+            conn.close()
+    finally:
+        if not dry_run:
+            release_lock()
 
-    setup_run_logging(run_id)
 
-    stage_names = [s["name"] for s in STAGE_REGISTRY]
-    start_idx = stage_names.index(start) if start in stage_names else 0
-    stop_idx = (stage_names.index(stop) + 1 if stop and stop in stage_names
-                else len(stage_names))
-
-    # Choose checkpoint based on --yes flag
-    checkpoint: Checkpoint = (
-        AutoCheckpoint() if yes else InteractiveCheckpoint()
-    )
-
+def _execute_stages(conn, start_idx, stop_idx, run_id, db_path, dry_run, yes, window, checkpoint):
     results: dict[str, Any] = {}
     total_start = time.time()
     budget: dict[str, Any] = {"api_calls": 0, "llm_calls": 0, "network_calls": 0}
 
     print(f"\n{'='*60}")
-    print(f"Pipeline run: {run_id}  (start={start}, stop={stop or 'end'})")
+    print(f"Pipeline run: {run_id}")
     print(f"{'='*60}")
 
     try:
@@ -293,6 +321,8 @@ def run_pipeline(
                 "dry_run": dry_run,
                 "db_path": db_path,
                 "yes": yes,
+                "window": window,
+                "checkpoint": checkpoint,
             }
 
             print(f"\n  [{name}] Running...")
@@ -312,20 +342,12 @@ def run_pipeline(
                 if _is_llm_stage(name):
                     budget["llm_calls"] += result.get("scored", 0) + result.get("drafted", 0)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - keep subsequent stages observable.
                 elapsed = time.time() - stage_start
                 results[name] = {"status": "error", "error": str(e), "duration_s": round(elapsed, 2)}
                 print(f"  [{name}] ERROR after {elapsed:.1f}s: {e}")
                 log_event(run_id, name, event="error", error=str(e))
 
-        # Release lock
-        if not dry_run:
-            release_lock()
-
-    except BaseException:
-        if not dry_run:
-            release_lock()
-        raise
     finally:
         elapsed_total = time.time() - total_start
         print(f"\n{'='*60}")
@@ -337,8 +359,6 @@ def run_pipeline(
 
         log_event(run_id, "_summary", event="pipeline_complete",
                   duration_s=round(elapsed_total, 2), budget=budget)
-        conn.commit()
-        conn.close()
 
     return results
 

@@ -1,9 +1,9 @@
 """Tests for pipeline stages using a temp DB and dry-run mode."""
-import json
-import tempfile
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("offline_pipeline")
 
 TEST_DB_PATH = None
 
@@ -27,28 +27,24 @@ class TestDiscoverStage:
         assert result["queries_run"] >= 0
         assert result["discovered"] >= 0
 
-    def test_blocklist_filters_junk(self):
+    def test_blocklist_filters_junk(self, monkeypatch):
         """Blocklisted titles are filtered out."""
-        from agent.stages.discover import run
         from agent import config
+        from agent.firecrawl_client import SearchResult
+        from agent.stages import discover
 
-        class FakeSearch:
-            titles = ["Intern Engineer"]
-            locations = []
-            max_queries_per_run = 1
-            blocklist_title_words = ["intern"]
-            blocklist_companies = []
+        config.get_settings().search.max_queries_per_run = 1
 
-        class FakeSettings:
-            search = FakeSearch()
+        class FakeClient:
+            def search(self, query, limit, time_window):
+                assert time_window == "1d"
+                assert "last 1 day" in query
+                return [SearchResult(url="https://example.com/intern", title="Intern Engineer")]
 
-        orig = config.get_settings
-        config.get_settings = lambda: FakeSettings()
-        try:
-            result = run(dry_run=True, run_id="test-2", db_path=TEST_DB_PATH)
-            assert result["blocked"] >= 0
-        finally:
-            config.get_settings = orig
+        monkeypatch.setattr(discover, "FirecrawlClient", FakeClient)
+        result = discover.run(run_id="test-2", db_path=TEST_DB_PATH, window="1d")
+        assert result["blocked"] == 1
+        assert result["discovered"] == 0
 
 
 class TestScrapeStage:
@@ -56,7 +52,7 @@ class TestScrapeStage:
 
     def test_dry_run_scrapes_picked_jobs(self):
         """Dry run marks picked jobs as scraped."""
-        from agent.db import connect, upsert_job, set_status
+        from agent.db import connect, set_status, upsert_job
         from agent.stages.scrape import run
 
         conn = connect(TEST_DB_PATH)

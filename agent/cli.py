@@ -5,6 +5,8 @@ from pathlib import Path
 
 import typer
 
+from agent.config import get_settings
+
 app = typer.Typer(
     help="Job-Hunt Agent: discover, score, and draft emails for job applications.",
 )
@@ -28,15 +30,18 @@ def run(
     """Run the full pipeline (or a slice)."""
     from agent.orchestrator import run_pipeline
 
-    results = run_pipeline(
-        start=from_stage,
-        stop=to_stage,
-        dry_run=dry_run,
-        yes=yes,
-        db_path=_get_db_path(db),
-        run_id=f"run-{window}",
-        force_unlock=force_unlock,
-    )
+    try:
+        results = run_pipeline(
+            start=from_stage,
+            stop=to_stage,
+            dry_run=dry_run,
+            yes=yes,
+            db_path=_get_db_path(db),
+            window=window,
+            force_unlock=force_unlock,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     print("\n=== Pipeline Summary ===")
     for stage, result in results.items():
@@ -59,8 +64,8 @@ def discover(
     from agent.orchestrator import run_pipeline
 
     results = run_pipeline(
-        start="discover", stop="pick", dry_run=False, yes=False,
-        db_path=_get_db_path(db), run_id=f"run-{window}",
+        start="discover", stop="discover", dry_run=False, yes=False,
+        db_path=_get_db_path(db), window=window,
     )
     print(f"\nDiscovered: {results.get('discover', {})}")
 
@@ -74,7 +79,7 @@ def pick(
     from agent.orchestrator import run_pipeline
 
     results = run_pipeline(
-        start="pick", stop="scrape", dry_run=False, yes=yes,
+        start="pick", stop="pick", dry_run=False, yes=yes,
         db_path=_get_db_path(db),
     )
     print(f"\nPick results: {results.get('pick', {})}")
@@ -88,7 +93,7 @@ def scrape(
     from agent.orchestrator import run_pipeline
 
     results = run_pipeline(
-        start="scrape", stop="score", dry_run=False, yes=False,
+        start="scrape", stop="scrape", dry_run=False, yes=False,
         db_path=_get_db_path(db),
     )
     print(f"\nScrape results: {results.get('scrape', {})}")
@@ -102,7 +107,7 @@ def score(
     from agent.orchestrator import run_pipeline
 
     results = run_pipeline(
-        start="score", stop="shortlist", dry_run=False, yes=False,
+        start="score", stop="score", dry_run=False, yes=False,
         db_path=_get_db_path(db),
     )
     print(f"\nScore results: {results.get('score', {})}")
@@ -117,7 +122,7 @@ def shortlist(
     from agent.orchestrator import run_pipeline
 
     results = run_pipeline(
-        start="shortlist", stop="contacts", dry_run=False, yes=yes,
+        start="shortlist", stop="shortlist", dry_run=False, yes=yes,
         db_path=_get_db_path(db),
     )
     print(f"\nShortlist results: {results.get('shortlist', {})}")
@@ -131,7 +136,7 @@ def contacts(
     from agent.orchestrator import run_pipeline
 
     results = run_pipeline(
-        start="contacts", stop="verify", dry_run=False, yes=False,
+        start="contacts", stop="contacts", dry_run=False, yes=False,
         db_path=_get_db_path(db),
     )
     print(f"\nContacts results: {results.get('contacts', {})}")
@@ -145,7 +150,7 @@ def verify(
     from agent.orchestrator import run_pipeline
 
     results = run_pipeline(
-        start="verify", stop="draft", dry_run=False, yes=False,
+        start="verify", stop="verify", dry_run=False, yes=False,
         db_path=_get_db_path(db),
     )
     print(f"\nVerify results: {results.get('verify', {})}")
@@ -200,8 +205,7 @@ def db_status(
     """Show DB-level status counts."""
     from agent.db import connect, get_jobs_by_status_count
 
-    from agent.config import get_settings as _get_settings
-    settings = _get_settings()
+    settings = get_settings()
     path = Path(db) if db else Path(settings.db_path)
     conn = connect(path)
     rows = get_jobs_by_status_count(conn)
@@ -272,7 +276,7 @@ def eval_cmd(
 
     import json as _json
 
-    total, correct = 0, 0
+    total = 0
     for f in sorted(eval_dir.glob("*.json")):
         data = _json.loads(f.read_text())
         label = data.get("label_score", -1)

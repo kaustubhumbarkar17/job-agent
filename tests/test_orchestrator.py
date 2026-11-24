@@ -1,10 +1,11 @@
 """Tests for orchestrator, checkpoints, and lock manager."""
-import json
 import os
 import time
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("offline_pipeline")
 
 TEST_DB_PATH = None
 
@@ -73,12 +74,6 @@ class TestCheckpoints:
 class TestLockManager:
     """Test single-run lock file."""
 
-    def setup_method(self) -> None:
-        """Ensure clean lock state before each test."""
-        lock_path = Path("data/.lock")
-        if lock_path.exists():
-            lock_path.unlink()
-
     def test_acquire_releases_lock(self):
         """Acquire and release a lock file."""
         from agent.orchestrator import acquire_lock, release_lock
@@ -96,6 +91,25 @@ class TestLockManager:
         with pytest.raises(LockError):
             acquire_lock()
         release_lock()
+
+    def test_force_unlock_requires_stale_inactive_lock(self):
+        from agent.orchestrator import LockError, acquire_lock, release_lock
+
+        lock = Path("data/.lock")
+        lock.touch()
+        with pytest.raises(LockError):
+            acquire_lock(force=True)
+        stale_time = time.time() - 7 * 3600
+        os.utime(lock, (stale_time, stale_time))
+        with pytest.raises(LockError):
+            acquire_lock()
+        acquire_lock(force=True)
+        try:
+            os.utime(lock, (stale_time, stale_time))
+            with pytest.raises(LockError):
+                acquire_lock(force=True)
+        finally:
+            release_lock()
 
 
 # -----------------------------------------------------------------------
@@ -178,9 +192,37 @@ class TestPipeline:
         )
 
         # score should be present (may be skipped if no scraped jobs)
-        assert "score" in results
-        # shortlist may be skipped or run
-        assert "shortlist" in results
+        assert list(results) == ["score", "shortlist"]
+
+    def test_cli_boundaries(self):
+        from typer.testing import CliRunner
+
+        from agent.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["pick", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "[scrape]" not in result.output
+        result = runner.invoke(app, ["run", "--from", "score", "--to", "pick", "--dry-run"])
+        assert result.exit_code == 2
+        assert "start stage" in result.output
+
+    def test_dry_runs_record_distinct_runs_in_separate_database(self):
+        from agent import config
+        from agent.db import connect
+        from agent.orchestrator import run_pipeline
+
+        for window in ("1d", "7d"):
+            run_pipeline(start="score", stop="score", dry_run=True, yes=True, window=window)
+
+        assert not Path(config.get_settings().db_path).exists()
+        conn = connect("data/dry-run.db")
+        try:
+            runs = conn.execute("SELECT run_id, window FROM runs").fetchall()
+        finally:
+            conn.close()
+        assert {row["window"] for row in runs} == {"1d", "7d"}
+        assert len({row["run_id"] for row in runs}) == 2
 
     def test_no_input_rows_skips(self):
         """Stages with zero input rows are skipped, not errored."""
@@ -209,6 +251,8 @@ class TestPipeline:
             db_path=TEST_DB_PATH, run_id="test-status",
         )
 
+        from agent import config
+        config.get_settings().db_path = TEST_DB_PATH
         summary = status_summary()
         assert isinstance(summary, dict)
         # discover should have created some rows
@@ -224,32 +268,22 @@ class TestPipelineScripted:
     """Pipeline runner with ScriptedCheckpoint for deterministic testing."""
 
     def test_dry_run_with_scripted_checkpoints(self):
-        """Full dry-run pipeline with ScriptedCheckpoint ends with drafts
-        recorded and zero external network calls.
-
-        We use ScriptedCheckpoint to bypass interactive prompts, ensuring
-        the pipeline can run end-to-end in a test without human input.
-        """
+        """Scripted choices control both pick and shortlist."""
         from agent.checkpoints import ScriptedCheckpoint
         from agent.orchestrator import run_pipeline
 
-        # Run full dry-run pipeline; all stages should complete or skip cleanly
         results = run_pipeline(
             start="discover",
-            stop=None,
+            stop="shortlist",
             dry_run=True,
-            yes=True,
+            checkpoint=ScriptedCheckpoint(selections=[[1, 3], [3]]),
             db_path=TEST_DB_PATH,
             run_id="test-scripted",
         )
 
-        # discover creates mock jobs → ok
         assert results["discover"].get("status") == "ok"
-
-        # pick: may succeed or be skipped (depends on discover output)
-        pick_result = results.get("pick")
-        if pick_result and pick_result.get("status") == "ok":
-            assert pick_result.get("selected", [])  # non-empty list
+        assert results["pick"]["selected"] == [1, 3]
+        assert results["shortlist"]["selected"] == [3]
 
     def test_crash_resume(self):
         """Re-running the pipeline after a partial completion retries

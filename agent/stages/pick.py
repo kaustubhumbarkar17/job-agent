@@ -6,15 +6,16 @@ Supports --yes for scripted runs (picks all).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
+from agent.checkpoints import AutoCheckpoint, Checkpoint, InteractiveCheckpoint
 from agent.db import connect, jobs_by_status, set_status
 
 
 def run(
     run_id: str = "",
     yes: bool = False,
-    db_path: Optional[str | Path] = None,
+    db_path: str | Path | None = None,
+    checkpoint: Checkpoint | None = None,
     **kwargs,
 ) -> dict:
     """Run the pick stage. Returns selected job IDs."""
@@ -32,22 +33,8 @@ def run(
             "label": f"[{j['id']}] {j['title']} | {j['company']} | {j['location']} | {j['source']}",
         })
 
-    if yes:
-        selected = [item["id"] for item in items]
-    else:
-        # Lazy import to avoid EOFError in non-tty environments (tests, CI)
-        import questionary
-
-        labels = [item["label"] for item in items]
-        chosen = questionary.checkbox(
-            "Select jobs to deep-scrape (Space to select, Enter to confirm):",
-            choices=labels,
-        ).ask()
-        if chosen is None:
-            print("  Cancelled.")
-            return {"selected": [], "total": 0}
-        chosen_indices = [i for i, l in enumerate(labels) if l in chosen]
-        selected = [items[i]["id"] for i in chosen_indices]
+    checkpoint = checkpoint or (AutoCheckpoint() if yes else InteractiveCheckpoint())
+    selected = checkpoint.select(items, label="Select jobs to deep-scrape")
 
     for job_id in selected:
         set_status(conn, job_id, "picked")
