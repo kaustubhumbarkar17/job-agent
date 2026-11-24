@@ -43,6 +43,7 @@ python -m agent.cli draft                # Draft emails (requires Gmail OAuth)
 | `mark-sent <draft-id>` | Record a send after sending manually in Gmail |
 | `mark-replied <draft-id>` | Record a reply and remove the draft from follow-ups |
 | `followups [--days 5]` | List manually sent drafts at least this old with no recorded reply |
+| `eval [--synthetic]` | Compare model rankings with independently labeled jobs |
 | `db-init` | Initialize the database |
 
 ## Architecture
@@ -59,6 +60,12 @@ Edit `config.yaml` for search terms, scoring weights, and draft limits.
 Secrets go in `.env` (gitignored).
 
 For Firecrawl Cloud, leave `FIRECRAWL_BASE_URL` blank and set `FIRECRAWL_API_KEY`. To use your own Firecrawl server for discovery and scraping, set `FIRECRAWL_BASE_URL=http://localhost:3002` in `.env`. Use the server's base URL, without `/v2`. Set `FIRECRAWL_SELF_HOSTED_API_KEY` only if that server requires a bearer token. The selected endpoint must support v2 search and structured JSON scraping. A self-hosted request failure stays on that endpoint, and the cloud key is reserved for Firecrawl Cloud.
+
+## Scoring evaluation
+
+Run `python -m agent.cli eval --synthetic` to exercise the harness offline. For a real evaluation, save 15–20 job descriptions as separate JSON files in `data/eval/`. Each file contains a `job` object with a `title` and the relevant posting details, a `label_score` integer from 0 to 100, and a short `label_note` explaining your judgment. Label the cases before seeing any model output.
+
+With your completed `profile.md` and Ollama running, use `python -m agent.cli eval`. Use `--model` to compare another installed chat model. The report scores every label with the pipeline rubric and shows Spearman correlation, top-five overlap, mean absolute error, and the five largest disagreements. Equal scores share an average Spearman rank. The top-five comparison breaks ties in filename order. The MVP targets are Spearman ≥ 0.70 and at least three shared top-five jobs.
 
 ## Development
 

@@ -1,0 +1,10 @@
+{
+  "job": {
+    "title": "Platform Engineer",
+    "company": "Example",
+    "url": "https://example.com/platform"
+  },
+  "label_score": 70,
+  "label_note": "Some overlap with deployment work.",
+  "synthetic_score": 55
+}

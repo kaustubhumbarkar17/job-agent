@@ -1,0 +1,10 @@
+{
+  "job": {
+    "title": "Backend Engineer",
+    "company": "Example",
+    "url": "https://example.com/backend"
+  },
+  "label_score": 90,
+  "label_note": "Strong match for backend projects.",
+  "synthetic_score": 80
+}

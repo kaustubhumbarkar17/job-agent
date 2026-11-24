@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from contextlib import closing
 from pathlib import Path
+from sqlite3 import Connection
 
 import httpx
 
@@ -22,6 +23,24 @@ def _correct_score(result: dict, profile: str) -> None:
     if result.get("dealbreaker") is not None:
         breakdown = dict.fromkeys(breakdown, 0)
     result.update(matched_skills=valid, breakdown=breakdown, score=sum(breakdown.values()))
+
+
+def load_rubric() -> tuple[str, dict]:
+    """Read the prompt and output schema shared by pipeline and evaluation."""
+    template = Path("prompts/score.md").read_text(encoding="utf-8")
+    return template, json.loads(Path("schemas/score.json").read_text(encoding="utf-8"))
+
+
+def score_job(
+    detail: dict, profile: str, rubric: tuple[str, dict], *,
+    conn: Connection | None = None, run_id: str = "", model: str | None = None,
+) -> dict:
+    """Apply the same model rubric and score corrections to one job."""
+    template, schema = rubric
+    prompt = template.replace("{profile_md}", profile).replace("{job_json}", json.dumps(detail))
+    result = chat_json(prompt, schema, model=model, conn=conn, run_id=run_id)
+    _correct_score(result, profile)
+    return result
 
 
 def _write_shortlist(jobs, path: Path) -> None:
@@ -68,8 +87,7 @@ def run(run_id: str = "", dry_run: bool = False, db_path=None, **kwargs) -> dict
 
         profile_path = Path("profile.md")
         profile = profile_path.read_text(encoding="utf-8") if profile_path.exists() else ""
-        schema = json.loads(Path("schemas/score.json").read_text(encoding="utf-8"))
-        template = Path("prompts/score.md").read_text(encoding="utf-8")
+        rubric = load_rubric()
         candidates = []
         failed = scored = rejected = 0
 
@@ -115,16 +133,15 @@ def run(run_id: str = "", dry_run: bool = False, db_path=None, **kwargs) -> dict
             conn.commit()
 
         for job, detail, _ in candidates:
-            prompt = template.replace("{profile_md}", profile).replace("{job_json}", json.dumps(detail))
             try:
                 result = {
+                    "score": 60,
                     "breakdown": {"skills": 0, "seniority": 25, "domain": 20, "location": 15},
                     "matched_skills": [],
                     "missing_skills": [],
                     "seniority_fit": "fit",
                     "reasoning": "Offline fixture score",
-                } if dry_run else chat_json(prompt, schema, conn=conn, run_id=run_id)
-                _correct_score(result, profile)
+                } if dry_run else score_job(detail, profile, rubric, conn=conn, run_id=run_id)
             except (LLMOutputError, httpx.HTTPError) as exc:
                 conn.execute(
                     "UPDATE jobs SET status = 'score_failed', status_reason = ? WHERE id = ?",

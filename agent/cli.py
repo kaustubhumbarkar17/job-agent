@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from agent.config import get_settings
+from agent.eval import evaluate
 
 app = typer.Typer(
     help="Job-Hunt Agent: discover, score, and draft emails for job applications.",
@@ -312,30 +313,7 @@ def followups(
         print(f"  [{row['id']}] {row['title']} @ {row['company']} · {row['email']} · {row['sent_at']} UTC")
 
 
-@app.command("eval")
-def eval_cmd(
-    db: str = typer.Option(None, "--db", help="Override database path."),
-):
-    """Run evaluation on the scorer against a labeled set."""
-    from pathlib import Path as _Path
-
-    eval_dir = _Path("tests/fixtures/eval")
-    if not eval_dir.exists():
-        print("No eval fixtures found at tests/fixtures/eval/")
-        return
-
-    import json as _json
-
-    total = 0
-    for f in sorted(eval_dir.glob("*.json")):
-        data = _json.loads(f.read_text())
-        label = data.get("label_score", -1)
-        total += 1
-        # In dry-run / test mode, just report the fixture exists.
-        print(f"  {f.name}: label_score={label}")
-
-    print(f"\nEval: {total} fixtures loaded.")
-
+app.command("eval")(evaluate)
 
 if __name__ == "__main__":
     app()
