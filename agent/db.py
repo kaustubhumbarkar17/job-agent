@@ -19,7 +19,8 @@ STATUS_TRANSITIONS: dict[str, set[str]] = {
     "scraped": {"scored", "rejected"},
     "scored": {"shortlisted", "rejected"},
     "shortlisted": {"contacted", "no_contact"},
-    "contacted": {"drafted"},
+    "contacted": {"verified", "drafted"},
+    "verified": {"drafted"},
 }
 
 

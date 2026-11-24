@@ -16,6 +16,16 @@
     "apply_url": {"type": "string"},
     "posted_date": {"type": ["string", "null"]},
     "company_domain": {"type": ["string", "null"]},
-    "hiring_manager_hint": {"type": ["string", "null"]}
+    "hiring_manager_hint": {"type": ["string", "null"]},
+    "posting_contact": {
+      "type": ["object", "null"],
+      "description": "A professional contact explicitly named with a role in this posting. Include an email only if the posting publishes it.",
+      "required": ["name", "role"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "role": {"type": "string", "minLength": 1},
+        "email": {"type": ["string", "null"]}
+      }
+    }
   }
 }

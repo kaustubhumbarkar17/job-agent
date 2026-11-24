@@ -163,7 +163,7 @@ STAGE_REGISTRY: list[dict[str, Any]] = [
     {
         "name": "verify",
         "input_status": "contacted",
-        "output_status": "drafted",
+        "output_status": "verified",
         "module": "agent.stages.verify",
         "fn": "run",
     },
