@@ -247,7 +247,7 @@ def test_score_corrections_report_ranking_and_checkpoint_defaults(monkeypatch):
                 "matched_skills": ["Python", "Clojure"],
                 "missing_skills": ["SQL"],
                 "reasoning": "Relevant work",
-                "dealbreaker": "Blocked role" if title == "Blocked" else None,
+                "dealbreaker": "Blocked role" if title == "Blocked" else " False ",
             }
 
         embedding = Mock(side_effect=AssertionError("small batches must skip embeddings"))

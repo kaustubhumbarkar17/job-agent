@@ -128,11 +128,12 @@ def run(
                 continue
 
             job_id, contact_id = candidate["job_id"], candidate["contact_id"]
-            title, company = candidate["title"], candidate["company"]
+            title = candidate["title"]
             try:
+                detail = json.loads(candidate["detail_json"] or "{}")
+                company = (candidate["company"] or "").strip() or (detail.get("company") or "").strip()
                 if not title or not company:
                     raise ValueError("Draft needs a job title and company.")
-                detail = json.loads(candidate["detail_json"] or "{}")
                 detail.update(title=title, company=company)
                 score = json.loads(candidate["score_json"] or "{}")
                 context = json.dumps({"job": detail, "matched_skills": score.get("matched_skills", [])})

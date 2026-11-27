@@ -61,6 +61,12 @@ Secrets go in `.env` (gitignored).
 
 For Firecrawl Cloud, leave `FIRECRAWL_BASE_URL` blank and set `FIRECRAWL_API_KEY`. To use your own Firecrawl server for discovery and scraping, set `FIRECRAWL_BASE_URL=http://localhost:3002` in `.env`. Use the server's base URL, without `/v2`. Set `FIRECRAWL_SELF_HOSTED_API_KEY` only if that server requires a bearer token. The selected endpoint must support v2 search and structured JSON scraping. A self-hosted request failure stays on that endpoint, and the cloud key is reserved for Firecrawl Cloud.
 
+## Contact discovery
+
+For shortlisted jobs with a company domain, the agent searches public LinkedIn hiring posts through the configured Firecrawl endpoint. It reuses one search per company and domain within the contact stage and checks up to five results. It saves named recruiting, HR, and engineering contacts when the post publishes a work address on the company domain. The candidate's original job posting can also supply a contact. The agent saves the source URL, deduplicates contacts, and keeps up to the configured `max_per_job`.
+
+Published addresses go straight to Hunter verification. Hunter contact lookup is the fallback when no published address is usable. A self-hosted Firecrawl server needs v2 web search and must return Markdown and structured JSON together for public posts. Contact searches have their own request budget so they can still run after discovery uses its search allowance.
+
 ## Scoring evaluation
 
 For a selection-only evaluation, open `data/eval/LABELING.md` and mark the jobs you would genuinely pursue. Each checklist entry links to its matching JSON file by ID. Run `python -m agent.cli eval --selection` after saving your choices. Use `--eval-dir` to evaluate a fresh batch in a separate folder. The report shows top-five overlap and how many marked jobs scored zero. Each ranked job includes the rubric breakdown, seniority fit, matched and missing skills, and the model's reason or dealbreaker.

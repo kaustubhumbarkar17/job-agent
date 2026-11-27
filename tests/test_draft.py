@@ -73,6 +73,15 @@ def test_approval_preview_attachment_cap_and_idempotency(verified_job):
     assert [call.args[0] for call in draft.create_draft.call_args_list] == ["alex@example.com", "mira@example.com"]
 
 
+def test_draft_uses_scraped_company_when_discovery_omits_it(verified_job):
+    get_settings().email.max_drafts_per_day = 1
+    with closing(connect(verified_job)) as conn, conn:
+        conn.execute("UPDATE jobs SET company = '', detail_json = ?", ('{"company": "Example"}',))
+
+    assert draft.run(db_path=verified_job, yes=True)["drafted"] == 1
+    assert draft.create_draft.call_args.args[1] == "SDE 2 at Example: Relevant Python experience"
+
+
 @pytest.mark.parametrize("proof", ["I worked on 99 services.", "Dear team, hello.", "word " * 130])
 def test_invalid_copy_is_regenerated_once_then_flagged(verified_job, proof):
     draft.chat_json.return_value = {**COPY, "proof": proof}

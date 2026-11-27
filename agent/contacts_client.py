@@ -1,6 +1,7 @@
 """Hunter client for sourced professional contacts and email verification."""
 from __future__ import annotations
 
+import re
 from sqlite3 import Connection
 from time import perf_counter
 from typing import Any, Protocol
@@ -69,10 +70,12 @@ def clean_email(value: object) -> str | None:
 
 
 def role_priority(position: str, roles: list[str]) -> int:
-    return next(
-        (index for index, role in enumerate(roles) if role.casefold() in position.casefold()),
-        len(roles),
-    )
+    title = " ".join(position.casefold().split())
+    for index, role in enumerate(roles):
+        target = " ".join(role.casefold().split())
+        if target and re.search(rf"(?<!\w){re.escape(target)}(?!\w)", title):
+            return index
+    return len(roles)
 
 
 def _confidence(value: object) -> float:

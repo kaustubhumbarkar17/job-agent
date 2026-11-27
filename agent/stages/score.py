@@ -21,7 +21,7 @@ def _correct_score(result: dict, profile: str) -> None:
     breakdown = result["breakdown"]
     breakdown["skills"] = round(breakdown["skills"] * len(valid) / len(matched)) if matched else 0
     dealbreaker = result.get("dealbreaker")
-    if isinstance(dealbreaker, str) and dealbreaker.strip().casefold() in {"", "none", "null"}:
+    if isinstance(dealbreaker, str) and dealbreaker.strip().casefold() in {"", "false", "none", "null"}:
         dealbreaker = None
     if dealbreaker is not None:
         breakdown = dict.fromkeys(breakdown, 0)

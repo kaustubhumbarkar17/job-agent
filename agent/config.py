@@ -48,6 +48,8 @@ class ContactsConfig(BaseModel):
     target_roles: List[str] = [
         "Talent Acquisition", "Recruiter",
         "Engineering Manager", "Head of Engineering", "CTO",
+        "Hiring Manager", "HR Manager", "Human Resources Manager",
+        "Engineering Director", "Director of Engineering",
     ]
     max_per_job: int = 3
     min_email_confidence: float = 0.8

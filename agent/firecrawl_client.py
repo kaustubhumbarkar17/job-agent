@@ -62,6 +62,7 @@ class FirecrawlClient:
 
     def __init__(
         self, api_key: str | None = None, *, conn: Connection | None = None, run_id: str = "",
+        search_limit: int | None = None,
     ):
         settings = get_settings()
         custom_url = settings.firecrawl_base_url.strip()
@@ -82,8 +83,9 @@ class FirecrawlClient:
             raise FirecrawlError("FIRECRAWL_API_KEY is not set")
         self._conn = conn
         self._run_id = run_id
+        self._search_limit = search_limit
         self._queries_used = 0
-        if conn is not None and run_id:
+        if search_limit is None and conn is not None and run_id:
             self._queries_used = conn.execute(
                 "SELECT COUNT(*) FROM api_calls WHERE service = ? AND endpoint = ? AND run_id = ?",
                 ("firecrawl", "/v2/search", run_id),
@@ -91,7 +93,8 @@ class FirecrawlClient:
 
     @property
     def queries_remaining(self) -> int:
-        return get_settings().search.max_queries_per_run - self._queries_used
+        limit = self._search_limit if self._search_limit is not None else get_settings().search.max_queries_per_run
+        return limit - self._queries_used
 
     @retry(
         retry=retry_if_exception_type(_TransientError),
@@ -171,12 +174,24 @@ class FirecrawlClient:
 
     def scrape_json(self, url: str, schema: dict) -> dict[str, Any]:
         """Scrape a posting and validate the extracted JSON."""
-        data = self._request(
+        return self._scrape_json(url, schema)["json"]
+
+    def scrape_json_with_markdown(self, url: str, schema: dict) -> tuple[dict[str, Any], str]:
+        """Return the source text alongside its validated extraction."""
+        data = self._scrape_json(url, schema, include_markdown=True)
+        return data["json"], data["markdown"]
+
+    def _scrape_json(self, url: str, schema: dict, *, include_markdown: bool = False) -> dict:
+        formats = [{"type": "json", "schema": schema}]
+        properties = {"json": schema}
+        if include_markdown:
+            formats.append({"type": "markdown"})
+            properties["markdown"] = {"type": "string"}
+        return self._request(
             "/v2/scrape",
-            {"url": url, "formats": [{"type": "json", "schema": schema}], "timeout": 60000},
-            {"type": "object", "required": ["json"], "properties": {"json": schema}},
+            {"url": url, "formats": formats, "timeout": 60000},
+            {"type": "object", "required": list(properties), "properties": properties},
         )
-        return data["json"]
 
 
 _client: FirecrawlClient | None = None
